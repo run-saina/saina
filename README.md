@@ -10,16 +10,29 @@ The Apache-2.0 code license does not grant rights to third-party weights or data
 ## Install from source
 
 ```sh
-pip install .                 # dependency-free HTTP client
+pip install .                # dependency-free HTTP client
 pip install '.[local,server]' # local inference and authenticated server
 ```
 
 ```python
 from saina import Saina
+
 client = Saina('https://your-endpoint.example', api_key='YOUR_KEY')
-result = client.ask(model='helm-0.8b', state='I was charged twice.', questions={
-    'issue': {'type': 'single_choice', 'question': 'Identify the banking issue.',
-              'options': {'duplicate': 'duplicate charge', 'delivery': 'card delivery'}}})
+
+result = client.ask(
+    model='helm-0.8b',
+    state='I was charged twice.',
+    questions={
+        'issue': {
+            'type': 'single_choice',
+            'question': 'Identify the banking issue.',
+            'options': {
+                'duplicate': 'duplicate charge',
+                'delivery': 'card delivery',
+            },
+        },
+    },
+)
 ```
 
 Keep credentials in environment variables or a secret manager, not source files.
@@ -29,12 +42,22 @@ Keep credentials in environment variables or a secret manager, not source files.
 ```python
 from saina import register_transformers
 from transformers import pipeline
+
 register_transformers()
-helm = pipeline('saina-classification', model='/path/to/staged/checkpoint',
-                device='cuda:0', model_kwargs={'device': 'cuda:0'})
-probabilities = helm({'task': 'Identify the banking issue.',
-    'input': 'I was charged twice.', 'choices': ['duplicate charge', 'card delivery'],
-    'mode': 'single_label'})
+
+helm = pipeline(
+    'saina-classification',
+    model='/path/to/staged/checkpoint',
+    device='cuda:0',
+    model_kwargs={'device': 'cuda:0'},
+)
+
+probabilities = helm({
+    'task': 'Identify the banking issue.',
+    'input': 'I was charged twice.',
+    'choices': ['duplicate charge', 'card delivery'],
+    'mode': 'single_label',
+})
 ```
 
 Use `multi_label` for independent memberships; output order always follows choices.
