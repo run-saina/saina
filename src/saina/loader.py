@@ -49,12 +49,15 @@ class FrozenHeadScorer:
         self.torch, self.device, self.max_length = torch, device, max_length
         root = Path(path)
         config = json.loads((root / 'head-config.json').read_text())
-        lora = config.get('requires_adapter') == 'adapter' and config.get('base_weights_frozen') is True
+        # Released checkpoints ship merged backbone weights beside the head. A head-only
+        # checkpoint without weights reuses the pinned, frozen base model instead.
+        merged = (root / 'model.safetensors').is_file() or (root / 'model.safetensors.index.json').is_file()
         if (config.get('prompt') not in ('BaseScorer.encode_prompt', 'AgenticScorer.encode_prompt') or
-                (config.get('frozen_backbone') is not True and not lora) or
+                (not merged and config.get('frozen_backbone') is not True) or
                 not re.fullmatch(r'[0-9a-f]{40}', config.get('revision', ''))):
             raise ValueError('Unsupported or unpinned head configuration')
-        self.tokenizer = AutoTokenizer.from_pretrained(config['model'], revision=config['revision'], trust_remote_code=False)
+        source, revision = (str(root), None) if merged else (config['model'], config['revision'])
+        self.tokenizer = AutoTokenizer.from_pretrained(source, revision=revision, trust_remote_code=False)
         self.codes, code_ids = [], []
         for width in (1, 2):
             for letters in product('ABCDEFGHIJKLMNOPQRSTUVWXYZ', repeat=width):
@@ -65,13 +68,9 @@ class FrozenHeadScorer:
                     code_ids.append(ids[0])
         if self.codes != config['codes'] or code_ids != config['code_ids']:
             raise ValueError('Checkpoint answer codes do not match the pinned tokenizer')
-        self.model = Qwen3_5ForConditionalGeneration.from_pretrained(config['model'],
-            revision=config['revision'], dtype=torch.bfloat16 if device.startswith('cuda') else torch.float32,
+        self.model = Qwen3_5ForConditionalGeneration.from_pretrained(source,
+            revision=revision, dtype=torch.bfloat16 if device.startswith('cuda') else torch.float32,
             trust_remote_code=False).to(device).eval().requires_grad_(False)
-        if lora:
-            from peft import PeftModel
-            self.model.model = PeftModel.from_pretrained(self.model.model, str(root / 'adapter'),
-                                                       is_trainable=False).to(device).eval()
         self.supported_modes = config.get('supported_modes', ['single_label'])
         self.prompt_format = config['prompt']
         self.head = torch.nn.Linear(self.model.lm_head.weight.shape[1], len(self.codes),
@@ -109,8 +108,7 @@ def load_scorer(checkpoint, revision=None, device='cpu', max_length=8192):
             raise ValueError('Set SAINA_REVISION to an immutable Hub commit for remote checkpoints')
         from huggingface_hub import snapshot_download
         path = Path(snapshot_download(checkpoint, revision=revision,
-            allow_patterns=['*.json', '*.safetensors', '*.txt', '*.model', '*.jinja', '*.tiktoken',
-                            'adapter/*.json', 'adapter/*.safetensors']))
+            allow_patterns=['*.json', '*.safetensors', '*.txt', '*.model', '*.jinja', '*.tiktoken']))
     if (path / 'head-config.json').is_file():
         return FrozenHeadScorer(path, device=device, max_length=max_length)
-    raise ValueError('Expected a staged Helm adapter/head checkpoint')
+    raise ValueError('Expected a staged Helm checkpoint with head-config.json')

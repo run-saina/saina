@@ -2,9 +2,12 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
-import torch
-from transformers import pipeline
-from saina.transformers import register, HelmConfig
+try:
+    import torch
+    from transformers import pipeline
+    from saina.transformers import register, HelmConfig
+except ImportError:  # local extras not installed
+    torch = None
 
 
 class FakeScorer:
@@ -15,6 +18,7 @@ class FakeScorer:
         return [1/len(choices)]*len(choices) if mode == 'single_label' else [.8]*len(choices)
 
 
+@unittest.skipIf(torch is None, 'requires the local extras (torch, transformers)')
 class IntegrationTests(unittest.TestCase):
     def test_factory_local_and_both_modes(self):
         register(); register()

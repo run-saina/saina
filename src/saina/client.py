@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 from urllib.error import HTTPError, URLError
 
-__version__ = '0.1.0rc1'
+__version__ = '0.1.0'
 
 
 class SainaHelmError(RuntimeError):

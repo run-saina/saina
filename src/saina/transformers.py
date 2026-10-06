@@ -38,7 +38,7 @@ class HelmModel(PreTrainedModel):
             request['input'], request['task'], request['choices'], mode=request['mode'])}
 
     def save_pretrained(self, *args, **kwargs):
-        raise NotImplementedError('Use the Helm checkpoint staging exporter; generic saving would lose adapter metadata')
+        raise NotImplementedError('Use the Helm checkpoint staging exporter; generic saving would drop the Helm head')
 
 
 class SainaClassificationPipeline(Pipeline):

@@ -7,6 +7,11 @@ Saina is operated by **Rama Labs Inc.** Website: https://saina.run.
 The current private model candidate is not cleared for commercial distribution.
 The Apache-2.0 code license does not grant rights to third-party weights or data.
 
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/run-saina/saina/blob/main/examples/saina_colab.ipynb)
+Try Helm in [`examples/saina_colab.ipynb`](examples/saina_colab.ipynb): run the
+[Hugging Face weights](https://huggingface.co/run-saina/saina-helm-0.8b) locally through the SDK pipeline,
+or call [Replicate](https://replicate.com/run-saina/saina-helm-0.8b) or your own endpoint.
+
 ## Install from source
 
 ```sh
@@ -82,6 +87,9 @@ uvicorn saina.server:create_app --factory --host 127.0.0.1 --port 8000
 Native typed requests use `/v1/ask`. The `saina.contract` module owns their schema.
 `saina.jev` provides the Jev/System One adapter; endpoint wiring is separate.
 Do not expose a plain HTTP server publicly; place it behind authenticated TLS.
+
+To run the server in Docker or deploy it to a cloud, see
+[run-saina/deploy](https://github.com/run-saina/deploy).
 
 ## Development
 
