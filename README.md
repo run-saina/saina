@@ -89,3 +89,7 @@ Do not expose a plain HTTP server publicly; place it behind authenticated TLS.
 and `cd clients/javascript && npm test`.
 
 No training datasets, private history, model weights, or credentials are included.
+
+## Developer contact
+
+For integration support and developer enquiries, email [dev@saina.run](mailto:dev@saina.run).

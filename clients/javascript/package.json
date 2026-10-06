@@ -5,9 +5,32 @@
   "type": "module",
   "main": "./index.js",
   "types": "./index.d.ts",
-  "exports": {".": {"types": "./index.d.ts", "import": "./index.js"}},
-  "files": ["index.js", "index.d.ts", "README.md", "LICENSE", "NOTICE"],
-  "engines": {"node": ">=20"},
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "license": "Apache-2.0",
-  "scripts": {"test": "node --test"}
+  "scripts": {
+    "test": "node --test"
+  },
+  "author": {
+    "name": "Saina",
+    "email": "dev@saina.run"
+  },
+  "bugs": {
+    "url": "https://github.com/run-saina/saina/issues",
+    "email": "dev@saina.run"
+  }
 }

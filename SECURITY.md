@@ -23,3 +23,7 @@ clear the weights or their training data for commercial distribution.
 
 If a credential leaks, revoke/rotate it immediately. Removing the file or rewriting
 history alone cannot make a disclosed credential secret again.
+
+## Developer contact
+
+Report security concerns privately to [dev@saina.run](mailto:dev@saina.run).
