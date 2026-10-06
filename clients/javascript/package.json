@@ -1,0 +1,13 @@
+{
+  "name": "@saina-run/sdk",
+  "version": "0.1.0-rc.1",
+  "description": "Typed client for the Saina Helm probability API",
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {".": {"types": "./index.d.ts", "import": "./index.js"}},
+  "files": ["index.js", "index.d.ts", "README.md", "LICENSE", "NOTICE"],
+  "engines": {"node": ">=20"},
+  "license": "Apache-2.0",
+  "scripts": {"test": "node --test"}
+}
