@@ -3,8 +3,7 @@
 Saina's HTTP SDK, shared decision contract, and optional Helm local inference.
 Saina is operated by **Rama Labs Inc.** Website: https://saina.run.
 
-**Pre-release source:** packages and model weights are not published yet.
-The current private model candidate is not cleared for commercial distribution.
+The current model is not cleared for commercial distribution.
 The Apache-2.0 code license does not grant rights to third-party weights or data.
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/run-saina/saina/blob/main/examples/saina_colab.ipynb)
@@ -12,12 +11,14 @@ Try Helm in [`examples/saina_colab.ipynb`](examples/saina_colab.ipynb): run the
 [Hugging Face weights](https://huggingface.co/run-saina/saina-helm-0.8b) locally through the SDK pipeline,
 or call [Replicate](https://replicate.com/run-saina/saina-helm-0.8b) or your own endpoint.
 
-## Install from source
+## Install
 
 ```sh
-pip install .                # dependency-free HTTP client
-pip install '.[local,server]' # local inference and authenticated server
+pip install saina                  # dependency-free HTTP client
+pip install 'saina[local,server]'  # local inference and authenticated server
 ```
+
+From a checkout, use `pip install .` or `pip install '.[local,server]'`.
 
 ```python
 from saina import Saina
