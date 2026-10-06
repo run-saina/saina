@@ -67,20 +67,20 @@ CPU operation is supported by the loader but is not an optimized ONNX release.
 
 ## JavaScript / TypeScript
 
-Source: `clients/javascript`; planned registry package: `@saina-run/sdk`.
+Source: `clients/javascript`; planned registry package: `@run-saina/sdk`.
 Exports `Saina` and `SainaError`, retaining `SainaHelm` aliases for compatibility.
 
 ## Distribution targets
 
 | Platform | Target | Status |
 |---|---|---|
-| GitHub | saina-run/saina | Public source |
+| GitHub | run-saina/saina | Public source |
 | PyPI | saina | Unpublished |
-| npm | @saina-run/sdk | Unpublished |
-| Hugging Face | saina-run/helm-0.8b | Not published; permissions pending |
-| Replicate | saina-run/helm-0.8b | Not deployed; credentials pending |
-| GHCR | ghcr.io/saina-run/helm | Image not published |
-| n8n | @saina-run/n8n-nodes-saina | Integration migration pending |
+| npm | @run-saina/sdk | Unpublished |
+| Hugging Face | run-saina/helm-0.8b | Not published; permissions pending |
+| Replicate | run-saina/helm-0.8b | Not deployed; credentials pending |
+| GHCR | ghcr.io/run-saina/helm | Image not published |
+| n8n | @run-saina/n8n-nodes-saina | Integration migration pending |
 
 Cloudflare gateway, AWS, Google Cloud deploy buttons and a Colab notebook are
 planned but not live yet. Cloudflare Workers cannot directly host these weights;

@@ -1,5 +1,5 @@
 {
-  "name": "@saina-run/sdk",
+  "name": "@run-saina/sdk",
   "version": "0.1.0-rc.1",
   "description": "Typed client for the Saina Helm probability API",
   "type": "module",

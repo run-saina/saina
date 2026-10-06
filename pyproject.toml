@@ -14,7 +14,7 @@ dependencies = []
 
 [project.urls]
 Homepage = "https://saina.run"
-Repository = "https://github.com/saina-run/saina"
+Repository = "https://github.com/run-saina/saina"
 
 [project.optional-dependencies]
 local = ["torch>=2.5,<3", "transformers>=5.3,<6", "accelerate>=1,<2", "peft>=0.21,<0.22", "safetensors>=0.4,<1", "huggingface-hub>=0.27,<2"]

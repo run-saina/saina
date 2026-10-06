@@ -1,9 +1,9 @@
-# @saina-run/sdk
+# @run-saina/sdk
 
 Pre-release Saina HTTP client. Not yet published to npm.
 
 ```js
-import { Saina } from '@saina-run/sdk';
+import { Saina } from '@run-saina/sdk';
 
 const client = new Saina({
   baseUrl: 'https://your-endpoint.example',
