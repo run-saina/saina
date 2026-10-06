@@ -1,6 +1,6 @@
 {
   "name": "@run-saina/sdk",
-  "version": "0.1.0-rc.1",
+  "version": "0.1.0-rc.2",
   "description": "Typed client for the Saina Helm probability API",
   "type": "module",
   "main": "./index.js",
@@ -33,5 +33,10 @@
     "url": "https://github.com/run-saina/saina/issues",
     "email": "dev@saina.run"
   },
-  "homepage": "https://saina.run"
+  "homepage": "https://saina.run",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/run-saina/saina.git",
+    "directory": "clients/javascript"
+  }
 }

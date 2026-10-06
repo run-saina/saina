@@ -1,6 +1,10 @@
 # @run-saina/sdk
 
-Pre-release Saina HTTP client. Not yet published to npm.
+Pre-release Saina HTTP client.
+
+```sh
+npm install @run-saina/sdk@next
+```
 
 ```js
 import { Saina } from '@run-saina/sdk';
