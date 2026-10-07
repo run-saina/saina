@@ -5,6 +5,7 @@ import os
 from threading import Lock
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from .errors import InputTooLong
@@ -12,7 +13,7 @@ from .loader import load_scorer
 from .contract import AskRequest, AskResponse, ask
 
 
-def create_app(scorer=None, api_key=None):
+def create_app(scorer=None, api_key=None, cors_origins=None):
     key = api_key if api_key is not None else os.environ.get('SAINA_API_KEY', '')
     if not key:
         raise RuntimeError('SAINA_API_KEY is required')
@@ -25,7 +26,16 @@ def create_app(scorer=None, api_key=None):
             max_length=int(os.environ.get('SAINA_MAX_LENGTH', '8192')))
         yield
 
-    app = FastAPI(title='Saina Helm', version='0.1.0', lifespan=lifespan)
+    app = FastAPI(title='Saina Helm', version='0.1.1', lifespan=lifespan)
+    if cors_origins is None:
+        cors_origins = os.environ.get('SAINA_CORS_ORIGINS', 'https://saina.run')
+    if isinstance(cors_origins, str):
+        cors_origins = [o.strip() for o in cors_origins.split(',') if o.strip()]
+    if cors_origins:
+        # Lets the hosted playground (saina.run) call this server from the browser.
+        # Only the listed origins; no cookies; only the two headers clients send.
+        app.add_middleware(CORSMiddleware, allow_origins=cors_origins, allow_methods=['GET', 'POST'],
+                           allow_headers=['Authorization', 'Content-Type'], allow_credentials=False, max_age=600)
     bearer = HTTPBearer(auto_error=False)
 
     def authorize(auth: HTTPAuthorizationCredentials | None = Depends(bearer)):

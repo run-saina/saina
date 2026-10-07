@@ -89,6 +89,10 @@ Native typed requests use `/v1/ask`. The `saina.contract` module owns their sche
 `saina.jev` provides the Jev/System One adapter; endpoint wiring is separate.
 Do not expose a plain HTTP server publicly; place it behind authenticated TLS.
 
+Browsers may call the server from the origins in `SAINA_CORS_ORIGINS` (comma-separated).
+The default, `https://saina.run`, lets the hosted [playground](https://saina.run/playground)
+talk to your server. Set it to an empty string to disable cross-origin access.
+
 To run the server in Docker or deploy it to a cloud, see
 [run-saina/deploy](https://github.com/run-saina/deploy).
 
