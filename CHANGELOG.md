@@ -8,7 +8,9 @@ Behavior changes for self-hosted servers:
   in a bounded queue (`SAINA_QUEUE_DEPTH`, default 4) for an execution slot (`SAINA_EXECUTION_SLOTS`,
   default 1). When the queue is full the server returns `429 overloaded` with `Retry-After`, instead of
   the previous immediate `503 Model is busy`. A request that waits longer than `SAINA_QUEUE_TIMEOUT`
-  (default 30 s) is dropped before running and gets `503 overloaded`.
+  (default 30 s) is dropped before running and gets `503 overloaded`. Both carry
+  `"admitted": false, "state": "not_admitted", "retry": "same_operation"` (nothing ran), so the Python
+  and JavaScript clients retry them automatically like the hosted API's.
 - **`https://saina.run` is no longer a default CORS origin.** The hosted playground no longer calls
   self-hosted servers. If you built your own browser UI, set `SAINA_CORS_ORIGINS` explicitly.
 - **Error bodies are typed.** Errors are `{"error": {"code", "message"}, "detail"}`; `detail` keeps the

@@ -6,7 +6,7 @@ waits longer than the queue timeout is dropped before it runs. A slot is release
 its model work has actually finished, never when a client disconnects.
 """
 import asyncio
-from concurrent.futures import CancelledError, ThreadPoolExecutor
+from concurrent.futures import CancelledError as JobCancelled, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 import hmac
 import os
@@ -33,16 +33,22 @@ class QueueExpired(Exception):
     pass
 
 
-def error(status, code, message, headers=None):
+def error(status, code, message, headers=None, extra=None):
     # `detail` keeps older clients that read FastAPI's default shape working.
     return JSONResponse(status_code=status, headers=headers,
-                        content={'error': {'code': code, 'message': message}, 'detail': message})
+                        content={'error': {'code': code, 'message': message, **(extra or {})}, 'detail': message})
 
 
 class ApiError(Exception):
-    def __init__(self, status, code, message, headers=None):
+    def __init__(self, status, code, message, headers=None, extra=None):
         super().__init__(message)
         self.status, self.code, self.message, self.headers = status, code, message, headers
+        self.extra = extra
+
+
+# Work rejected or dropped by the queue never ran and nothing was recorded, so the same request can be
+# sent again after Retry-After. Same fields as the hosted gateway's error contract, so clients retry it.
+NOT_ADMITTED = {'admitted': False, 'state': 'not_admitted', 'retry': 'same_operation'}
 
 
 class BoundedExecutor:
@@ -63,7 +69,19 @@ class BoundedExecutor:
             return {'slots': self.slots, 'depth': self.depth, 'running': self.running,
                     'queued': self.admitted - self.running}
 
-    def submit(self, fn, request_id=None, deadline=None):
+    def reserve(self):
+        """Take one place in the queue, or raise `Overloaded`. Pair with `submit(..., reserved=True)` or `release()`."""
+        with self._lock:
+            if self.admitted >= self.slots + self.depth:
+                raise Overloaded()
+            self.admitted += 1
+
+    def release(self):
+        """Give back a place taken by `reserve()` that will not be submitted."""
+        with self._lock:
+            self.admitted -= 1
+
+    def submit(self, fn, request_id=None, deadline=None, reserved=False):
         enqueued = time.monotonic()
         expires = enqueued + self.queue_timeout
         if deadline is not None:
@@ -85,10 +103,15 @@ class BoundedExecutor:
                     self.running -= 1
 
         with self._lock:
-            if self.admitted >= self.slots + self.depth:
-                raise Overloaded()
-            self.admitted += 1
-            future = self._pool.submit(run)
+            if not reserved:
+                if self.admitted >= self.slots + self.depth:
+                    raise Overloaded()
+                self.admitted += 1
+            try:
+                future = self._pool.submit(run)
+            except BaseException:
+                self.admitted -= 1
+                raise
             if request_id:
                 self._jobs[request_id] = future
 
@@ -168,7 +191,7 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
 
     @app.exception_handler(ApiError)
     async def api_error(request, exc):
-        return error(exc.status, exc.code, exc.message, exc.headers)
+        return error(exc.status, exc.code, exc.message, exc.headers, exc.extra)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request, exc):
@@ -198,6 +221,26 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
             raise ApiError(400, 'invalid_request', f'Invalid {name} header')
         return int(value)
 
+    async def result_of(future):
+        # Waits for a job without tying its cancellation to the handler's: a job cancelled in the queue
+        # surfaces as concurrent.futures.CancelledError from `result()`, while cancelling this handler
+        # (asyncio.CancelledError) drops the job if it is still queued and propagates unchanged.
+        loop = asyncio.get_running_loop()
+        waiter = loop.create_future()
+
+        def wake(_):
+            try:
+                loop.call_soon_threadsafe(lambda: waiter.done() or waiter.set_result(None))
+            except RuntimeError:  # loop already closed
+                pass
+        future.add_done_callback(wake)
+        try:
+            await waiter
+        except asyncio.CancelledError:
+            future.cancel()  # no effect once running: the slot is held until the work finishes
+            raise
+        return future.result()
+
     async def serve(request, kind, prepared, respond):
         # Metering headers are honored only from the gateway's service token.
         trusted = kind == 'service'
@@ -206,18 +249,28 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
         deadline_ms = int_header(request, 'x-saina-deadline-ms') if trusted else None
         model = app.state.scorer
         try:
-            # Validate and encode every question before taking an execution slot.
             check_capabilities(prepared, getattr(model, 'supported_modes', ('single_label',)))
-            encoded = await asyncio.to_thread(encode_all, prepared, model)
-            if expected is not None and sum(map(len, encoded)) != expected:
-                raise MeteringMismatch()
-            future, timing = executor.submit(lambda: execute(prepared, model, encoded),
-                request_id=request_id, deadline=deadline_ms / 1000 if deadline_ms else None)
-            execution = await asyncio.wrap_future(future)
+            # Take a queue place before tokenizing, so a full queue rejects without encoding anything.
+            # Encoding happens outside the execution slot; the place is given back if it fails.
+            executor.reserve()
+            submitted = False
+            try:
+                encoded = await asyncio.to_thread(encode_all, prepared, model)
+                if expected is not None and sum(map(len, encoded)) != expected:
+                    raise MeteringMismatch()
+                future, timing = executor.submit(lambda: execute(prepared, model, encoded), reserved=True,
+                    request_id=request_id, deadline=deadline_ms / 1000 if deadline_ms else None)
+                submitted = True
+            finally:
+                if not submitted:
+                    executor.release()
+            execution = await result_of(future)
         except Overloaded:
-            raise ApiError(429, 'overloaded', 'Inference queue is full', {'Retry-After': '1'}) from None
-        except (QueueExpired, CancelledError):
-            raise ApiError(503, 'overloaded', 'Request expired in the inference queue', {'Retry-After': '1'}) from None
+            raise ApiError(429, 'overloaded', 'Inference queue is full', {'Retry-After': '1'}, NOT_ADMITTED) from None
+        except (QueueExpired, JobCancelled):
+            # Dropped before running (expired, or cancelled by the gateway): nothing ran.
+            raise ApiError(503, 'overloaded', 'Request expired in the inference queue', {'Retry-After': '1'},
+                           NOT_ADMITTED) from None
         except MeteringMismatch:
             raise ApiError(409, 'metering_mismatch', 'Encoded input does not match the expected token count') from None
         except InputTooLong:

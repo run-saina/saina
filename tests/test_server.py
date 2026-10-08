@@ -56,8 +56,10 @@ class FakeScorer:
 
     def __init__(self):
         self.forwards = 0
+        self.encodes = 0
 
     def encode(self, context, question, choices, mode='single_label'):
+        self.encodes += 1
         if question == 'too long':
             from saina.errors import InputTooLong
             raise InputTooLong('too long')
@@ -157,6 +159,50 @@ class MeteringAndQueueTests(unittest.TestCase):
         self.assertEqual(r.status_code, 422)
         self.assertEqual(r.json()['error']['code'], 'invalid_request')
         self.assertEqual(self.scorer.forwards, 0)
+        self.assertEqual(c.app.state.executor.admitted, 0)  # the queue place taken for encoding was given back
+
+    def test_full_queue_rejects_before_tokenizing_and_is_retryable(self):
+        from saina.client import _error, _retryable
+        app = self.app(queue_depth=0)
+        with TestClient(app) as c:
+            app.state.executor.reserve()  # the only place is taken
+            r = c.post('/v1/ask', json=ASK, headers={'Authorization': 'Bearer k'})
+            self.assertEqual(r.status_code, 429)
+            self.assertEqual(r.headers['Retry-After'], '1')
+            self.assertEqual(r.json()['error'], {'code': 'overloaded', 'message': 'Inference queue is full',
+                'admitted': False, 'state': 'not_admitted', 'retry': 'same_operation'})
+            self.assertEqual(self.scorer.encodes, 0)
+            err, typed = _error(r.status_code, r.content, r.headers)
+            self.assertTrue(typed and _retryable(err))
+            app.state.executor.release()
+            self.assertEqual(c.post('/v1/ask', json=ASK, headers={'Authorization': 'Bearer k'}).status_code, 200)
+
+    def test_cancelled_queued_job_is_503_not_admitted(self):
+        import threading, time
+        app = self.app()
+        with TestClient(app) as c:
+            ex = app.state.executor
+            gate, started = threading.Event(), threading.Event()
+            busy, _ = ex.submit(lambda: (started.set(), gate.wait()))
+            self.assertTrue(started.wait(5))
+            result = {}
+            t = threading.Thread(target=lambda: result.update(r=c.post('/v1/ask', json=ASK, headers={
+                'Authorization': 'Bearer svc', 'X-Saina-Request-Id': 'q1'})))
+            t.start()
+            for _ in range(500):  # until the request is queued behind the busy slot
+                if ex.cancel('q1') == 'cancelled':
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail('request never queued')
+            t.join(5)
+            gate.set()
+            busy.result(timeout=5)
+            r = result['r']
+            self.assertEqual(r.status_code, 503, r.text)
+            self.assertEqual(r.json()['error']['code'], 'overloaded')
+            self.assertIs(r.json()['error']['admitted'], False)
+            self.assertEqual(self.scorer.forwards, 0)
 
     def test_scorer_without_explicit_usage_is_rejected(self):
         class Legacy:
@@ -198,8 +244,10 @@ class BoundedExecutorTests(unittest.TestCase):
         import threading
         from saina.server import BoundedExecutor, Overloaded, QueueExpired
         ex = BoundedExecutor(slots=1, depth=1, queue_timeout=5)
-        gate = threading.Event()
-        first, _ = ex.submit(gate.wait, request_id='a')
+        gate, started = threading.Event(), threading.Event()
+        first, _ = ex.submit(lambda: (started.set(), gate.wait())[1], request_id='a')
+        # A job the pool has not picked up yet is still cancellable; wait until 'a' really runs.
+        self.assertTrue(started.wait(5))
         second, _ = ex.submit(lambda: 2, request_id='b')
         with self.assertRaises(Overloaded):
             ex.submit(lambda: 3)
@@ -216,12 +264,15 @@ class BoundedExecutorTests(unittest.TestCase):
     def test_queued_work_past_its_deadline_never_runs(self):
         import threading, time
         from saina.server import BoundedExecutor, QueueExpired
-        ex = BoundedExecutor(slots=1, depth=2, queue_timeout=0.05)
-        gate = threading.Event()
+        ex = BoundedExecutor(slots=1, depth=2, queue_timeout=5)
+        gate, started = threading.Event(), threading.Event()
         ran = []
-        ex.submit(gate.wait)
+        # The blocker must be running (not itself expiring in the queue) before the late job is queued.
+        ex.submit(lambda: (started.set(), gate.wait()))
+        self.assertTrue(started.wait(5))
+        ex.queue_timeout = 0.05  # applies to jobs submitted from now on
         late, _ = ex.submit(lambda: ran.append(1))
-        time.sleep(0.1)
+        time.sleep(0.1)  # the late job cannot start before gate.set(), so it is past its 0.05 s deadline
         gate.set()
         with self.assertRaises(QueueExpired):
             late.result(timeout=5)

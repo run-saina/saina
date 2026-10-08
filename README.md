@@ -137,12 +137,15 @@ Requests wait in a bounded FIFO queue for a fixed number of execution slots:
 | `SAINA_QUEUE_DEPTH` | `4` | Requests that may wait for a slot. When full, new requests get `429 overloaded` immediately. |
 | `SAINA_QUEUE_TIMEOUT` | `30` | Seconds a request may wait; after that it is dropped before running and gets `503 overloaded`. |
 
-Every question in a request is validated and encoded before the request takes a slot, so an invalid
+A request takes its queue place before it is tokenized, so a full queue rejects without encoding anything.
+Every question is then validated and encoded before the request waits for a slot, so an invalid
 later question fails the whole request without running the earlier ones. A slot is released only when
 the model work actually finishes, even if the client has disconnected.
 
 Errors are JSON: `{"error": {"code": "...", "message": "..."}, "detail": "..."}`. Codes include
 `invalid_api_key`, `invalid_request`, `overloaded`, and `inference_failed`. Messages never echo inputs.
+`overloaded` errors also carry `"admitted": false, "state": "not_admitted", "retry": "same_operation"`:
+the request never ran, so the clients retry it after `Retry-After`.
 
 ### Usage metering
 
