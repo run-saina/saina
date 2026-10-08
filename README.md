@@ -86,7 +86,14 @@ uvicorn saina.server:create_app --factory --host 127.0.0.1 --port 8000
 ```
 
 Native typed requests use `/v1/ask`. The `saina.contract` module owns their schema.
-`saina.jev` provides the Jev/System One adapter; endpoint wiring is separate.
+`/v1/systemone` accepts the System One wire format (`noul`, `choice`, `score`) used by Jev
+clients and OpenRouter's Decisions API; `saina.jev` holds that adapter. `GET /v1/models` lists
+the served model in OpenRouter's provider format, and `GET /healthz` reports the pinned revision.
+
+`SAINA_API_KEY` may hold several comma-separated keys, one per caller, so a single key can be
+revoked by removing it and restarting. Behind a TLS-terminating proxy (`X-Forwarded-Proto` or
+Cloudflare's `CF-Visitor`), plain-HTTP requests are refused with `426` and HTTPS responses carry HSTS.
+Run uvicorn with `--no-access-log` if request metadata must not be logged.
 Do not expose a plain HTTP server publicly; place it behind authenticated TLS.
 
 Browsers may call the server from the origins in `SAINA_CORS_ORIGINS` (comma-separated).
