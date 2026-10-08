@@ -88,7 +88,7 @@ uvicorn saina.server:create_app --factory --host 127.0.0.1 --port 8000
 Native typed requests use `/v1/ask`. The `saina.contract` module owns their schema.
 `/v1/systemone` accepts the System One wire format (`noul`, `choice`, `score`) used by Jev
 clients and OpenRouter's Decisions API; `saina.jev` holds that adapter. `GET /v1/models` lists
-the served model in OpenRouter's provider format, and `GET /healthz` reports the pinned revision.
+the served model in OpenRouter's provider format, `GET /healthz` reports the pinned revision and queue state, and `GET /livez` reports process liveness.
 
 `SAINA_API_KEY` may hold several comma-separated keys, one per caller, so a single key can be
 revoked by removing it and restarting. Behind a TLS-terminating proxy (`X-Forwarded-Proto` or
@@ -96,9 +96,51 @@ Cloudflare's `CF-Visitor`), plain-HTTP requests are refused with `426` and HTTPS
 Run uvicorn with `--no-access-log` if request metadata must not be logged.
 Do not expose a plain HTTP server publicly; place it behind authenticated TLS.
 
-Browsers may call the server from the origins in `SAINA_CORS_ORIGINS` (comma-separated).
-The default, `https://saina.run`, lets the hosted [playground](https://saina.run/playground)
-talk to your server. Set it to an empty string to disable cross-origin access.
+Browsers may call the server only from origins listed in `SAINA_CORS_ORIGINS` (comma-separated).
+The default is empty: no cross-origin access. Set it if you build your own browser UI for your server.
+
+### Queueing and overload
+
+Requests wait in a bounded FIFO queue for a fixed number of execution slots:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SAINA_EXECUTION_SLOTS` | `1` | Concurrent model executions. Raise only after measuring that it is safe on your GPU. |
+| `SAINA_QUEUE_DEPTH` | `4` | Requests that may wait for a slot. When full, new requests get `429 overloaded` immediately. |
+| `SAINA_QUEUE_TIMEOUT` | `30` | Seconds a request may wait; after that it is dropped before running and gets `503 overloaded`. |
+
+Every question in a request is validated and encoded before the request takes a slot, so an invalid
+later question fails the whole request without running the earlier ones. A slot is released only when
+the model work actually finishes, even if the client has disconnected.
+
+Errors are JSON: `{"error": {"code": "...", "message": "..."}, "detail": "..."}`. Codes include
+`invalid_api_key`, `invalid_request`, `overloaded`, and `inference_failed`. Messages never echo inputs.
+
+### Usage metering
+
+`usage.input_tokens` is the total length of the exact token sequences fed to the model, one per question,
+so a shared `state` is counted once for every question. `pip install 'saina[tokenize]'` installs
+`saina.tokenize.TokenCounter`, which counts the same tokens without torch:
+
+```python
+from saina.tokenize import TokenCounter
+from saina.contract import AskRequest
+
+counter = TokenCounter.from_checkpoint('run-saina/saina-helm-0.8b', revision='<pinned commit>')
+counter.count_ask(AskRequest.model_validate(body))  # per-question input tokens
+```
+
+### Behind a gateway
+
+A gateway authenticates with `SAINA_SERVICE_TOKEN` (comma-separated tokens allowed) instead of a caller key.
+Only that token may send `X-Saina-Request-Id`, `X-Saina-Expected-Input-Tokens` (the server refuses with
+`409 metering_mismatch` before running if its own count differs) and `X-Saina-Deadline-Ms` (absolute Unix
+milliseconds after which queued work is dropped), and call `DELETE /v1/internal/requests/{request_id}` to drop
+queued work it abandoned. Bind the server to a private interface in this setup.
+
+Saina's hosted API at `https://api.saina.run` runs this server behind a separate gateway that handles accounts,
+credits, and rate limits. Those do not apply to self-hosted servers: a self-hosted server has only the
+keys you configure and the queue limits above.
 
 To run the server in Docker or deploy it to a cloud, see
 [run-saina/deploy](https://github.com/run-saina/deploy).

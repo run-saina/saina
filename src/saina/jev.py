@@ -1,8 +1,8 @@
 """TypeSafe System One wire adapter; model quality/calibration remain Helm's."""
 import json
-import math
 from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from .prepare import execute, prepare_systemone
 
 
 def render(value):
@@ -39,38 +39,29 @@ class SystemOneRequest(BaseModel):
     questions: Annotated[dict[str, Question], Field(min_length=1, max_length=256)]
 
 
-def evaluate(request, scorer):
-    answers = {}
-    input_tokens = 0
-    for key, q in request.questions.items():
-        if q.type == 'noul':
-            criteria = q.criteria or {}
-            labels = ['true', 'false']
-            choices = [f'Yes: {render(criteria.get("true", "The answer is yes"))}',
-                       f'No: {render(criteria.get("false", "The answer is no"))}']
-        else:
-            labels = list(q.criteria) if q.type == 'choice' else [str(i) for i in range(len(q.criteria))]
-            values = list(q.criteria.values()) if q.type == 'choice' else q.criteria
-            choices = [label if value is None else f'{label}: {render(value)}'
-                       for label, value in zip(labels, values)]
-        context, question = render(request.state), render(q.instructions)
-        p = list(scorer.predict(context, question, choices))
-        if len(p) != len(labels) or any(not math.isfinite(x) or not 0 <= x <= 1 for x in p) or not math.isclose(sum(p), 1, abs_tol=1e-5):
-            raise ValueError('Invalid probability distribution')
-        input_tokens += getattr(scorer, 'last_input_tokens', 0)
-        n, peak = len(p), max(range(len(p)), key=p.__getitem__)
-        if q.type == 'noul':
-            answer = {'type': 'noul', 'noul': p[0]}
-        else:
-            confidence = (max(p) - 1 / n) / (1 - 1 / n)
-            answer = {'type': q.type, 'probabilities': dict(zip(labels, p))}
-            if q.type == 'choice':
-                answer['choice'] = labels[peak]
-            else:
-                confidence = 1 - sum(v * abs(i - peak) for i, v in enumerate(p)) / (sum(abs(i - (n - 1) / 2) for i in range(n)) / n)
-                answer.update(score=sum(i * v for i, v in enumerate(p)),
-                              legend={str(i): render(v) for i, v in enumerate(q.criteria)})
-            answer['confidence'] = max(0., min(1., confidence))
-        answers[key] = answer
+def answer(q, labels, p):
+    n, peak = len(p), max(range(len(p)), key=p.__getitem__)
+    if q.type == 'noul':
+        return {'type': 'noul', 'noul': p[0]}
+    confidence = (max(p) - 1 / n) / (1 - 1 / n)
+    result = {'type': q.type, 'probabilities': dict(zip(labels, p))}
+    if q.type == 'choice':
+        result['choice'] = labels[peak]
+    else:
+        confidence = 1 - sum(v * abs(i - peak) for i, v in enumerate(p)) / (sum(abs(i - (n - 1) / 2) for i in range(n)) / n)
+        result.update(score=sum(i * v for i, v in enumerate(p)),
+                      legend={str(i): render(v) for i, v in enumerate(q.criteria)})
+    result['confidence'] = max(0., min(1., confidence))
+    return result
+
+
+def respond(request, prepared, execution):
+    answers = {q.key: answer(request.questions[q.key], list(q.labels), p)
+               for q, p in zip(prepared, execution.probabilities)}
     return {'model': 'saina-helm-0.8b', 'answers': answers,
-            'usage': {'input_tokens': input_tokens, 'output_tokens': 0}}
+            'usage': {'input_tokens': execution.total_input_tokens, 'output_tokens': 0}}
+
+
+def evaluate(request, scorer, expected_input_tokens=None):
+    prepared = prepare_systemone(request)
+    return respond(request, prepared, execute(prepared, scorer, expected_input_tokens=expected_input_tokens))

@@ -1,8 +1,8 @@
 """The native typed-question contract shared by HTTP and local integrations."""
 import json
-import math
 from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from .prepare import execute, prepare_ask, validate_distribution  # noqa: F401 (re-exported)
 
 Content = str | dict[str, JsonValue] | list[JsonValue]
 Probability = Annotated[float, Field(ge=0, le=1, strict=True)]
@@ -136,12 +136,6 @@ def question_options(q):
                     for label, value in zip(labels, values)]
 
 
-def validate_distribution(p, size, *, independent=False):
-    if (len(p) != size or any(type(v) not in (int, float) or not math.isfinite(v) or not 0 <= v <= 1 for v in p)
-            or (not independent and not math.isclose(sum(p), 1, rel_tol=0, abs_tol=1e-5))):
-        raise ValueError('Invalid model probability vector')
-
-
 def decision_reason(p, threshold, min_margin=0):
     top, second = sorted(p, reverse=True)[:2]
     margin = top-second
@@ -149,51 +143,53 @@ def decision_reason(p, threshold, min_margin=0):
             else 'below_margin' if margin < min_margin else 'accepted')
 
 
-def ask(request: AskRequest, scorer):
-    # Check capability before any forward passes in a mixed request.
-    if any(q.type == 'multi_choice' for q in request.questions.values()):
-        if 'multi_label' not in getattr(scorer, 'supported_modes', ['single_label']):
-            raise ValueError('Checkpoint does not declare trained multi-label support')
-    answers, input_tokens = {}, 0
-    for key, q in request.questions.items():
-        labels, choices = question_options(q)
-        independent = q.type == 'multi_choice'
-        kwargs = {'mode': 'multi_label'} if independent else {}
-        p = list(scorer.predict(render(request.state), render(q.question), choices, **kwargs))
-        validate_distribution(p, len(labels), independent=independent)
-        input_tokens += getattr(scorer, 'last_input_tokens', 0)
-        n, peak = len(p), max(range(len(p)), key=p.__getitem__)
-        answer = {'type': q.type}
-        if independent:
-            answer['memberships'] = dict(zip(labels, p))
-        elif q.type == 'yes_no':
-            answer.update(yes=p[0], no=1-p[0], confidence=2*max(p[0], 1-p[0])-1)
+def answer(request, q, labels, p):
+    """Typed answer for one question from its validated probability vector."""
+    independent = q.type == 'multi_choice'
+    n, peak = len(p), max(range(len(p)), key=p.__getitem__)
+    result = {'type': q.type}
+    if independent:
+        result['memberships'] = dict(zip(labels, p))
+    elif q.type == 'yes_no':
+        result.update(yes=p[0], no=1-p[0], confidence=2*max(p[0], 1-p[0])-1)
+    else:
+        result['probabilities'] = dict(zip(labels, p))
+        confidence = (max(p)-1/n)/(1-1/n)
+        if q.type == 'single_choice':
+            result['selection'] = labels[peak]
         else:
-            answer['probabilities'] = dict(zip(labels, p))
-            confidence = (max(p)-1/n)/(1-1/n)
-            if q.type == 'single_choice':
-                answer['selection'] = labels[peak]
+            mean_distance = sum(abs(i-(n-1)/2) for i in range(n))/n
+            confidence = 1-sum(v*abs(i-peak) for i, v in enumerate(p))/mean_distance
+            result.update(expected_level=sum(i*v for i, v in enumerate(p)), levels=q.levels)
+        result['confidence'] = max(0., min(1., confidence))
+    if request.mode == 'decision':
+        threshold = q.threshold if 'threshold' in q.model_fields_set else request.threshold
+        if independent:
+            selections = [label for label, v in zip(labels, p) if v >= threshold]
+            result.update(selections=selections, reason='accepted' if selections else 'below_threshold')
+        else:
+            margin = (q.min_margin if 'min_margin' in q.model_fields_set else request.min_margin) if q.type != 'rating' else 0.
+            reason = decision_reason(p, threshold, margin)
+            selected = reason == 'accepted'
+            result['reason'] = reason
+            if q.type == 'yes_no':
+                result['selected'] = (peak == 0) if selected else None
+            elif q.type == 'single_choice':
+                result['selection'] = labels[peak] if selected else None
             else:
-                mean_distance = sum(abs(i-(n-1)/2) for i in range(n))/n
-                confidence = 1-sum(v*abs(i-peak) for i, v in enumerate(p))/mean_distance
-                answer.update(expected_level=sum(i*v for i, v in enumerate(p)), levels=q.levels)
-            answer['confidence'] = max(0., min(1., confidence))
-        if request.mode == 'decision':
-            threshold = q.threshold if 'threshold' in q.model_fields_set else request.threshold
-            if independent:
-                selections = [label for label, v in zip(labels, p) if v >= threshold]
-                answer.update(selections=selections, reason='accepted' if selections else 'below_threshold')
-            else:
-                margin = (q.min_margin if 'min_margin' in q.model_fields_set else request.min_margin) if q.type != 'rating' else 0.
-                reason = decision_reason(p, threshold, margin)
-                selected = reason == 'accepted'
-                answer['reason'] = reason
-                if q.type == 'yes_no':
-                    answer['selected'] = (peak == 0) if selected else None
-                elif q.type == 'single_choice':
-                    answer['selection'] = labels[peak] if selected else None
-                else:
-                    answer['level'] = peak if selected else None
-        answers[key] = answer
+                result['level'] = peak if selected else None
+    return result
+
+
+def respond(request, prepared, execution):
+    """Response body from an all-or-nothing execution; usage is the encoded input length."""
+    answers = {q.key: answer(request, request.questions[q.key], list(q.labels), p)
+               for q, p in zip(prepared, execution.probabilities)}
     return {'model': MODEL, 'answers': answers,
-            'usage': {'input_tokens': input_tokens, 'output_tokens': 0}}
+            'usage': {'input_tokens': execution.total_input_tokens, 'output_tokens': 0}}
+
+
+def ask(request: AskRequest, scorer, expected_input_tokens=None):
+    # Encode and check capability for every question before any forward pass in a mixed request.
+    prepared = prepare_ask(request)
+    return respond(request, prepared, execute(prepared, scorer, expected_input_tokens=expected_input_tokens))
