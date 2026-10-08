@@ -117,7 +117,7 @@ def _keys(value):
 
 
 def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
-               execution_slots=None, queue_depth=None, queue_timeout=None):
+               execution_slots=None, queue_depth=None, queue_timeout=None, scorer_loader=None):
     env = os.environ.get
     # One key per self-hosted caller, comma-separated, so a key can be revoked without rotating the rest.
     keys = _keys(api_key if api_key is not None else env('SAINA_API_KEY', ''))
@@ -132,7 +132,7 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
 
     @asynccontextmanager
     async def lifespan(app):
-        app.state.scorer = scorer or load_scorer(env('SAINA_CHECKPOINT'),
+        app.state.scorer = scorer or (scorer_loader or load_scorer)(env('SAINA_CHECKPOINT'),
             revision=env('SAINA_REVISION'), device=env('SAINA_DEVICE', 'cpu'),
             max_length=int(env('SAINA_MAX_LENGTH', '8192')))
         yield
