@@ -42,6 +42,33 @@ result = client.ask(
 ```
 
 Keep credentials in environment variables or a secret manager, not source files.
+The base URL defaults to Saina's hosted API, `https://api.saina.run`; pass your own for a self-hosted server.
+
+### Hosted API: idempotency, retries, errors, credits
+
+```python
+import os
+from saina import Saina, new_idempotency_key
+from saina.client import InsufficientCredits
+
+client = Saina(api_key=os.environ['SAINA_API_KEY'], auto_idempotency_key=True)
+result, meta = client.ask_with_metadata(model='helm-0.8b', state='...', questions={...})
+meta.credits_charged, meta.balance, meta.request_id, meta.replayed  # ints, str, bool
+client.balance()['available']                                       # int
+client.usage(from_='2026-10-01'); client.requests(limit=50)
+```
+
+- **Idempotency.** Inference is retried automatically only with an `Idempotency-Key` (a UUIDv7): pass
+  `idempotency_key=new_idempotency_key()` or set `auto_idempotency_key=True`. Every retry of a call reuses its
+  key and identical body bytes, so it cannot run or charge twice; the client never makes a new key for a retry.
+- **Retries** (`max_retries=2`, total wait capped by `max_retry_delay=30` s) only on connection loss or an
+  uncertain response, `accounting_unavailable`, `request_in_progress`, `rate_limited`, and
+  `overloaded`/`inference_unavailable` when the request was not admitted, honoring `Retry-After`.
+- **Errors.** `SainaError` carries `status`, `code`, `request_id`, `admitted`, `state`, `retry`, `retry_after`
+  and `suspension`, with a subclass per code (`InsufficientCredits`, `RateLimited`, `IdempotencyConflict`, ...;
+  see `saina.client.ERROR_CLASSES`).
+- **Credits** are 64-bit integers sent as decimal strings; Python returns `int`, JavaScript `BigInt`.
+  `ask` still returns the same response dict; billing headers are in `ask_with_metadata` and `client.last_metadata`.
 
 ## Transformers / local inference
 
@@ -74,7 +101,8 @@ CPU operation is supported by the loader but is not an optimized ONNX release.
 ## JavaScript / TypeScript
 
 Source: `clients/javascript`; planned registry package: `@run-saina/sdk`.
-Exports `Saina` and `SainaError`, retaining `SainaHelm` aliases for compatibility.
+Exports `Saina` and `SainaError`, retaining `SainaHelm` aliases for compatibility. Same idempotency, retry,
+error and metadata API (`askWithMetadata`, `systemOne`, `balance`, `usage`, `requests`); credits are `BigInt`.
 
 ## Serving and contracts
 

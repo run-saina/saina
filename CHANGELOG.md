@@ -24,3 +24,25 @@ New:
 - `SAINA_SERVICE_TOKEN` for a gateway in front of the server, with `X-Saina-Request-Id`,
   `X-Saina-Expected-Input-Tokens`, `X-Saina-Deadline-Ms` and `DELETE /v1/internal/requests/{id}`.
 - `GET /livez`, and queue state in `GET /healthz`.
+
+Clients (Python `saina.client` and JavaScript `@run-saina/sdk` 0.2.0):
+
+- **Default base URL** is the hosted API, `https://api.saina.run`; a positional `base_url` still works.
+- **Idempotency keys.** `new_idempotency_key()` / `newIdempotencyKey()` generate RFC 9562 UUIDv7 keys;
+  `ask(..., idempotency_key=)` / `ask(request, {idempotencyKey})` send `Idempotency-Key`, and
+  `auto_idempotency_key` / `autoIdempotencyKey` generate one key per logical call.
+- **Bounded retries, only with a key.** Retries reuse the same key and identical body bytes and happen only on
+  connection loss or an uncertain response, `accounting_unavailable`, `request_in_progress`, `rate_limited`,
+  and `overloaded`/`inference_unavailable` with `admitted=false`. `Retry-After` is honored, otherwise
+  exponential backoff with jitter; `max_retries` (default 2) and a total-wait cap (`max_retry_delay`).
+  Calls without a key are still sent exactly once.
+- **Typed errors.** `SainaError` (alias `SainaHelmError`, `status` unchanged) adds `code`, `request_id`,
+  `admitted`, `state`, `retry`, `retry_after` and `suspension`, with a subclass per contract code
+  (`InsufficientCredits`, `RateLimited`, `IdempotencyConflict`, ...) and `SainaConnectionError`. Old
+  `{"detail"}` and non-JSON error bodies still raise `SainaError` with `status`.
+- **Billing metadata.** `ask_with_metadata()` / `askWithMetadata()` return the unchanged response plus
+  `request_id`, `credits_charged`, `balance`, `price_version`, `replayed`, `idempotency_key`; also on
+  `last_metadata` / `lastMetadata`.
+- `system_one()` / `systemOne()` for `POST /v1/systemone`.
+- Read-only account calls with the API key: `balance()`, `usage()`, `requests()`. Credit strings become
+  Python `int` and JavaScript `BigInt` (never a JavaScript number).
