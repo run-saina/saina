@@ -37,8 +37,12 @@ class FrozenHeadScorer:
         self.head.eval().requires_grad_(False)
         self.restored_head = True
 
+    def count_text(self, text):
+        """Tokens in one billable text part (see prepare.bill)."""
+        return len(self.tokenizer.encode(text, add_special_tokens=False)) if text else 0
+
     def encode(self, context, question, choices, mode='single_label'):
-        """Token IDs of the exact model input; their length is the metered usage."""
+        """Token IDs of the exact model input; their length is checked against the metering header."""
         if mode not in self.supported_modes:
             raise ValueError('This legacy checkpoint was not trained for multi-label prediction')
         return encode(self.prompt_format, self.tokenizer, self.codes, context, question, list(choices),

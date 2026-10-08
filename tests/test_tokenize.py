@@ -30,15 +30,22 @@ class TokenCounterTests(unittest.TestCase):
             encode = self.counter.encode
             def forward(_, ids, count, mode='single_label'):
                 return [1 / count] * count
-        self.assertEqual(ask(request, Scorer())['usage']['input_tokens'], sum(counts))
+            count_text = self.counter.count_text
+        billed = self.counter.bill_ask(request)
+        self.assertEqual(ask(request, Scorer())['usage']['input_tokens'], billed.total)
+        self.assertLess(billed.total, sum(counts))  # prompt formatting and repeated context are not billed
         self.assertNotIn('torch', sys.modules)
 
-    def test_repeated_context_counts_again(self):
+    def test_context_is_billed_once_but_read_per_question(self):
         from saina.contract import AskRequest
         one = {'type': 'yes_no', 'question': 'Urgent?'}
         single = AskRequest.model_validate({'model': 'helm-0.8b', 'state': 'x' * 400, 'questions': {'a': one}})
         double = AskRequest.model_validate({'model': 'helm-0.8b', 'state': 'x' * 400, 'questions': {'a': one, 'b': one}})
+        # The current model reads the context once per question; billing counts it once.
         self.assertEqual(sum(self.counter.count_ask(double)), 2 * sum(self.counter.count_ask(single)))
+        s, d = self.counter.bill_ask(single), self.counter.bill_ask(double)
+        self.assertEqual(d.context_tokens, s.context_tokens)
+        self.assertEqual(d.total, s.total + s.question_tokens[0])
 
     def test_manifest_pins_tokenizer(self):
         m = self.counter.manifest()

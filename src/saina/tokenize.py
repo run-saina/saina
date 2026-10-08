@@ -9,7 +9,7 @@ import json
 import re
 from pathlib import Path
 from .prompt import PROMPT_FORMATS, answer_codes, encode
-from .prepare import prepare_ask, prepare_systemone, encode_all
+from .prepare import bill, billable_ask, billable_systemone, prepare_ask, prepare_systemone, encode_all
 
 TOKENIZER_FILES = ['*.json', '*.txt', '*.model', '*.jinja', '*.tiktoken']
 
@@ -55,8 +55,20 @@ class TokenCounter:
         return encode(self.prompt_format, self.tokenizer, self.codes, context, question, list(choices),
                       self.max_length, mode)
 
+    def count_text(self, text):
+        """Tokens in one billable text part, without special tokens or prompt formatting."""
+        return len(self.tokenizer.encode(text, add_special_tokens=False)) if text else 0
+
+    def bill_ask(self, request):
+        """Billable input: the context once plus each question's text, options or levels as sent."""
+        return bill(billable_ask(request), self)
+
+    def bill_systemone(self, request):
+        return bill(billable_systemone(request), self)
+
     def count_prepared(self, prepared):
-        """Per-question input-token counts; raises before returning if any question is invalid."""
+        """Per-question model-input lengths (context-window limit and metering check, not billing);
+        raises before returning if any question is invalid."""
         return [len(ids) for ids in encode_all(prepared, self)]
 
     def count_ask(self, request):
