@@ -10,14 +10,14 @@ Content = str | dict[str, JsonValue] | list[JsonValue]
 Probability = Annotated[float, Field(ge=0, le=1, strict=True)]
 
 
-def short_name(model_id):
-    return model_id.removeprefix('saina-')
+# Names 0.1.x callers sent before releases were named `saina-helm-*`; accepted, never returned.
+LEGACY_ALIASES = {LEGACY_MODEL_ID: {'helm-0.8b'}}
 
 
 def model_names(model_id):
     """Names that select this model. Unversioned `saina-helm` means whichever Helm the
-    endpoint serves; versioned names only ever reach that exact model."""
-    return {model_id, short_name(model_id), 'saina-helm'}
+    endpoint serves; a release name such as `saina-helm-2-0.8b` only ever reaches that model."""
+    return {model_id, 'saina-helm', *LEGACY_ALIASES.get(model_id, ())}
 
 
 def served_model(scorer, requested):
@@ -203,7 +203,7 @@ def respond(request, prepared, execution, model_id=LEGACY_MODEL_ID):
     """Response body from an all-or-nothing execution; usage is the billable input."""
     answers = {q.key: answer(request, request.questions[q.key], list(q.labels), p)
                for q, p in zip(prepared, execution.probabilities)}
-    return {'model': short_name(model_id), 'answers': answers,
+    return {'model': model_id, 'answers': answers,
             'usage': {'input_tokens': execution.billable_tokens, 'output_tokens': 0}}
 
 

@@ -16,7 +16,7 @@ class TokenCounterTests(unittest.TestCase):
     def test_counter_matches_server_usage_and_needs_no_torch(self):
         import sys
         from saina.contract import AskRequest, ask
-        request = AskRequest.model_validate({'model': 'helm-0.8b', 'state': {'ticket': 'Charged twice, please help'},
+        request = AskRequest.model_validate({'model': 'saina-helm-0.8b', 'state': {'ticket': 'Charged twice, please help'},
             'questions': {'team': {'type': 'single_choice', 'question': 'Which team?',
                                    'options': {'billing': 'Money', 'tech': None}},
                           'tags': {'type': 'multi_choice', 'question': 'Tags?', 'options': {'a': None, 'b': None}},
@@ -39,8 +39,8 @@ class TokenCounterTests(unittest.TestCase):
     def test_context_is_billed_once_but_read_per_question(self):
         from saina.contract import AskRequest
         one = {'type': 'yes_no', 'question': 'Urgent?'}
-        single = AskRequest.model_validate({'model': 'helm-0.8b', 'state': 'x' * 400, 'questions': {'a': one}})
-        double = AskRequest.model_validate({'model': 'helm-0.8b', 'state': 'x' * 400, 'questions': {'a': one, 'b': one}})
+        single = AskRequest.model_validate({'model': 'saina-helm-0.8b', 'state': 'x' * 400, 'questions': {'a': one}})
+        double = AskRequest.model_validate({'model': 'saina-helm-0.8b', 'state': 'x' * 400, 'questions': {'a': one, 'b': one}})
         # The current model reads the context once per question; billing counts it once.
         self.assertEqual(sum(self.counter.count_ask(double)), 2 * sum(self.counter.count_ask(single)))
         s, d = self.counter.bill_ask(single), self.counter.bill_ask(double)

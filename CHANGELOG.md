@@ -10,9 +10,10 @@ Helm 2 support. Requires no changes from 0.2.0 callers of the original Helm.
 - **Helm 2 billing:** a Helm 2 request is billed for the one model input it reads, so `usage.input_tokens`,
   `X-Saina-Billable-Tokens` and `X-Saina-Input-Tokens` agree. The original Helm is still billed for the text
   sent. `TokenCounter` prices both the same way the server does.
-- **Model names:** `saina-helm` reaches whichever Helm an endpoint serves; versioned names (`helm-2-0.8b`,
-  `saina-helm-2-0.8b`, `helm-0.8b`, `saina-helm-0.8b`) only reach that model, otherwise `404 not_found`.
-  Responses name the model that answered.
+- **Model names:** `saina-helm` reaches whichever Helm an endpoint serves; release names (`saina-helm-2-0.8b`,
+  `saina-helm-0.8b`) only reach that model, otherwise `404 not_found`. Responses give the release name of the
+  model that answered: `/v1/ask` now returns `saina-helm-0.8b` where it returned `helm-0.8b`. The old request
+  name `helm-0.8b` is still accepted for the original Helm.
 - **Several models per server:** `SAINA_MODELS=checkpoint@revision[:max_length],...`; the first is the
   default. All models share the bounded queue.
 - **Context limit** defaults to the checkpoint's trained limit (262,144 tokens for Helm 2, 8,192 for the

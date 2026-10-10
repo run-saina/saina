@@ -27,7 +27,7 @@ from saina import Saina
 client = Saina('https://your-endpoint.example', api_key='YOUR_KEY')
 
 result = client.ask(
-    model='saina-helm',  # whichever Helm the endpoint serves; or pin 'helm-2-0.8b'
+    model='saina-helm',  # whichever Helm the endpoint serves; or pin 'saina-helm-2-0.8b'
     state='I was charged twice.',
     questions={
         'issue': {
@@ -53,7 +53,7 @@ from saina import Saina, new_idempotency_key
 from saina.client import InsufficientCredits
 
 client = Saina(api_key=os.environ['SAINA_API_KEY'], auto_idempotency_key=True)
-result, meta = client.ask_with_metadata(model='helm-0.8b', state='...', questions={...})
+result, meta = client.ask_with_metadata(model='saina-helm', state='...', questions={...})
 meta.credits_charged, meta.balance, meta.request_id, meta.replayed  # ints, str, bool
 client.balance()['available']                                       # int
 client.usage(from_='2026-10-01'); client.requests(limit=50)
@@ -73,9 +73,9 @@ client.usage(from_='2026-10-01'); client.requests(limit=50)
 
 ## Model names
 
-`saina-helm` selects whichever Helm the endpoint serves. Versioned names (`helm-2-0.8b` /
-`saina-helm-2-0.8b`, `helm-0.8b` / `saina-helm-0.8b`) only reach that exact model; an endpoint
-serving a different version answers `404`. Responses always name the model that answered.
+`saina-helm` selects whichever Helm the endpoint serves. Release names (`saina-helm-2-0.8b`,
+`saina-helm-0.8b`) only reach that exact model; an endpoint serving a different release answers `404`.
+Responses always give the release name of the model that answered.
 
 ## Local inference
 

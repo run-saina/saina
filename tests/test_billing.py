@@ -12,7 +12,7 @@ class Words:
 
 
 def ask(state, questions):
-    return AskRequest.model_validate({'model': 'helm-0.8b', 'state': state, 'questions': questions})
+    return AskRequest.model_validate({'model': 'saina-helm-0.8b', 'state': state, 'questions': questions})
 
 
 class BillableTextTests(unittest.TestCase):

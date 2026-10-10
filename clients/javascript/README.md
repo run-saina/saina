@@ -16,7 +16,7 @@ const client = new Saina({
 });
 
 const result = await client.ask({
-  model: 'helm-0.8b',
+  model: 'saina-helm',
   state: 'I was charged twice.',
   questions: {
     issue: {

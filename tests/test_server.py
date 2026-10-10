@@ -106,7 +106,7 @@ class SharedPassRouteTests(unittest.TestCase):
         questions['ok'] = {'type': 'yes_no', 'question': 'OK?'}
         questions['level'] = {'type': 'rating', 'question': 'How much?', 'levels': ['low', 'high']}
         with TestClient(create_app(scorer=scorer, api_key='k')) as c:
-            r = c.post('/v1/ask', json={'model': 'helm-0.8b', 'state': {'a': 1}, 'questions': questions},
+            r = c.post('/v1/ask', json={'model': 'saina-helm-0.8b', 'state': {'a': 1}, 'questions': questions},
                        headers={'Authorization': 'Bearer k'})
             self.assertEqual(r.status_code, 200, r.text)
             self.assertEqual(len(scorer.calls), 1)
@@ -133,18 +133,19 @@ class ModelNameTests(unittest.TestCase):
 
     def test_unversioned_alias_reaches_the_served_model_and_versions_are_exact(self):
         helm2 = SharedFakeScorer(); helm2.model_id = 'saina-helm-2-0.8b'
-        for model in ('saina-helm', 'helm-2-0.8b', 'saina-helm-2-0.8b'):
+        for model in ('saina-helm', 'saina-helm-2-0.8b'):
             r = self.post(helm2, model)
             self.assertEqual(r.status_code, 200, model)
-            self.assertEqual(r.json()['model'], 'helm-2-0.8b')
-        for model in ('helm-0.8b', 'saina-helm-0.8b', 'other'):
+            self.assertEqual(r.json()['model'], 'saina-helm-2-0.8b')
+        for model in ('helm-2-0.8b', 'helm-0.8b', 'saina-helm-0.8b', 'other'):
             r = self.post(helm2, model)
             self.assertEqual(r.status_code, 404, model)
             self.assertEqual(r.json()['error']['code'], 'not_found')
             self.assertIn('saina-helm-2-0.8b', r.json()['detail'])
         legacy = FakeScorer()
-        self.assertEqual(self.post(legacy, 'saina-helm').json()['model'], 'helm-0.8b')
-        self.assertEqual(self.post(legacy, 'helm-2-0.8b').status_code, 404)
+        for model in ('saina-helm', 'saina-helm-0.8b', 'helm-0.8b'):  # helm-0.8b: the 0.1 request name
+            self.assertEqual(self.post(legacy, model).json()['model'], 'saina-helm-0.8b', model)
+        self.assertEqual(self.post(legacy, 'saina-helm-2-0.8b').status_code, 404)
 
     def test_health_and_listing_name_the_loaded_model(self):
         helm2 = SharedFakeScorer(); helm2.model_id = 'saina-helm-2-0.8b'
@@ -172,14 +173,14 @@ class TwoModelTests(unittest.TestCase):
 
     def test_names_route_to_the_right_model(self):
         with TestClient(self.app) as c:
-            for model, answered in (('saina-helm', 'helm-2-0.8b'), ('helm-2-0.8b', 'helm-2-0.8b'),
-                                    ('saina-helm-2-0.8b', 'helm-2-0.8b'), ('helm-0.8b', 'helm-0.8b'),
-                                    ('saina-helm-0.8b', 'helm-0.8b')):
+            for model, answered in (('saina-helm', 'saina-helm-2-0.8b'), ('saina-helm-2-0.8b', 'saina-helm-2-0.8b'),
+                                    ('helm-0.8b', 'saina-helm-0.8b'), ('saina-helm-0.8b', 'saina-helm-0.8b')):
                 r = self.ask(c, model)
                 self.assertEqual((r.status_code, r.json()['model']), (200, answered), model)
             self.assertEqual(self.legacy.forwards, 2)
-            self.assertEqual(len(self.helm2.calls), 3)
-            self.assertEqual(self.ask(c, 'helm-3-0.8b').status_code, 404)
+            self.assertEqual(len(self.helm2.calls), 2)
+            for unknown in ('helm-2-0.8b', 'saina-helm-3-0.8b'):
+                self.assertEqual(self.ask(c, unknown).status_code, 404, unknown)
             # System One: known names route, other labels reach the default.
             self.assertEqual(self.ask(c, 'saina-helm-0.8b', '/v1/systemone').json()['model'], 'saina-helm-0.8b')
             self.assertEqual(self.ask(c, 'openrouter/saina', '/v1/systemone').json()['model'], 'saina-helm-2-0.8b')
@@ -202,13 +203,13 @@ class TwoModelTests(unittest.TestCase):
             for _ in range(executor.slots + executor.depth):
                 executor.reserve()
             try:
-                for model in ('saina-helm', 'helm-0.8b'):
+                for model in ('saina-helm', 'saina-helm-0.8b'):
                     r = self.ask(c, model)
                     self.assertEqual((r.status_code, r.json()['error']['code']), (429, 'overloaded'), model)
             finally:
                 for _ in range(executor.slots + executor.depth):
                     executor.release()
-            self.assertEqual(self.ask(c, 'helm-0.8b').status_code, 200)
+            self.assertEqual(self.ask(c, 'saina-helm-0.8b').status_code, 200)
 
     def test_duplicate_releases_are_refused(self):
         other = SharedFakeScorer(); other.model_id = 'saina-helm-2-0.8b'
@@ -232,7 +233,7 @@ class RouteTests(unittest.TestCase):
         return create_app(scorer=self.scorer, api_key=api_key, **kwargs)
 
     def test_any_listed_key_is_accepted(self):
-        body = {'model': 'helm-0.8b', 'state': 'Charged twice.', 'questions': {
+        body = {'model': 'saina-helm-0.8b', 'state': 'Charged twice.', 'questions': {
             'team': {'type': 'single_choice', 'question': 'Which team?', 'options': {'billing': None, 'tech': None}}}}
         with TestClient(self.app()) as c:
             for key, status in (('k1', 200), ('k2', 200), ('k3', 401), ('', 401)):
@@ -291,7 +292,7 @@ class RouteTests(unittest.TestCase):
 
 
 
-ASK = {'model': 'helm-0.8b', 'state': 'Charged twice.', 'questions': {
+ASK = {'model': 'saina-helm-0.8b', 'state': 'Charged twice.', 'questions': {
     'team': {'type': 'single_choice', 'question': 'Which team?', 'options': {'billing': None, 'tech': None}},
     'urgent': {'type': 'yes_no', 'question': 'Urgent?'}}}
 

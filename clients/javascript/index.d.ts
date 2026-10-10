@@ -8,7 +8,8 @@ export type Question =
   | {type: 'multi_choice'; question: Content; options: Options};
 export type DecisionQuestion = Question extends infer Q ? Q extends Question ? Q & {threshold?: number} &
   (Q['type'] extends 'yes_no' | 'single_choice' ? {min_margin?: number} : {}) : never : never;
-export type AskRequest = {model: 'saina-helm' | 'helm-2-0.8b' | 'saina-helm-2-0.8b' | 'helm-0.8b' | 'saina-helm-0.8b'; state: Content} & (
+/** `saina-helm`: whichever Helm the endpoint serves. `helm-0.8b` is the deprecated 0.1 name of `saina-helm-0.8b`. */
+export type AskRequest = {model: 'saina-helm' | 'saina-helm-2-0.8b' | 'saina-helm-0.8b' | 'helm-0.8b'; state: Content} & (
   | {mode?: 'distribution'; questions: Record<string, Question>}
   | {mode: 'decision'; threshold?: number; min_margin?: number; questions: Record<string, DecisionQuestion>});
 export type Reason = 'accepted' | 'below_threshold' | 'below_margin' | 'tie';
