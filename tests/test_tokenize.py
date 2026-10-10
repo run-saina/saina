@@ -47,7 +47,7 @@ class TokenCounterTests(unittest.TestCase):
         self.assertEqual(d.context_tokens, s.context_tokens)
         self.assertEqual(d.total, s.total + s.question_tokens[0])
 
-    def test_shared_pass_counts_and_bills_the_one_model_input(self):
+    def test_shared_pass_counts_one_model_input_and_bills_the_text_sent(self):
         from saina.contract import AskRequest
         from saina.prompt import SHARED_PROMPT
         from saina.tokenize import TokenCounter
@@ -57,7 +57,9 @@ class TokenCounterTests(unittest.TestCase):
             'questions': {f'q{i}': {'type': 'yes_no', 'question': f'Question {i}?'} for i in range(5)}})
         counts = shared.count_ask(request)
         self.assertEqual(len(counts), 1)
-        self.assertEqual(shared.bill_ask(request).total, counts[0])
+        # Same bill as the original Helm for the same request: the text sent, not the model input.
+        self.assertEqual(shared.bill_ask(request), self.counter.bill_ask(request))
+        self.assertLess(shared.bill_ask(request).total, counts[0])
         self.assertLess(counts[0], sum(self.counter.count_ask(request)))  # the state is read once
         self.assertTrue(shared.manifest()['shared_trunk_pass'])
 

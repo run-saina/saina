@@ -183,13 +183,12 @@ the request never ran, so the clients retry it after `Retry-After`.
 
 ### Usage metering
 
-For the original Helm, `usage.input_tokens` counts the text you send: the `state` once, plus each question
+`usage.input_tokens` counts the text you send, the same way for every model: the `state` once, plus each question
 and its options or levels (keys and descriptions). Strings count as sent; objects and arrays count as compact JSON in the
 order sent; each part is tokenized on its own with the pinned tokenizer. Prompt formatting the server adds,
 and re-reading the `state` for each question, are not counted. The responses' `X-Saina-Billable-Tokens`
 header repeats this number; `X-Saina-Input-Tokens` is the length of the token sequences actually fed to the
-model. Helm 2 reads the `state` and every question in one model input, and is billed for that input:
-`usage.input_tokens`, `X-Saina-Billable-Tokens` and `X-Saina-Input-Tokens` are then the same number.
+model (one sequence per question for the original Helm, one for the whole request for Helm 2).
 `pip install 'saina[tokenize]'` installs `saina.tokenize.TokenCounter`, which computes both without
 torch:
 

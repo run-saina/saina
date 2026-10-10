@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 from .prompt import PROMPT_FORMATS, SHARED_PROMPT, answer_codes, encode, encode_shared_prompt
 from .loader import LEGACY_MODEL_ID, checkpoint_model_id
-from .prepare import Bill, bill, billable_ask, billable_systemone, prepare_ask, prepare_systemone, encode_all
+from .prepare import bill, billable_ask, billable_systemone, prepare_ask, prepare_systemone, encode_all
 
 TOKENIZER_FILES = ['*.json', '*.txt', '*.model', '*.jinja', '*.tiktoken']
 
@@ -72,20 +72,12 @@ class TokenCounter:
         """Tokens in one billable text part, without special tokens or prompt formatting."""
         return len(self.tokenizer.encode(text, add_special_tokens=False)) if text else 0
 
-    def _model_input(self, prepared):
-        # A shared-pass model is billed for the one input it reads; it has no per-question split.
-        return Bill(sum(self.count_prepared(prepared)), ())
-
     def bill_ask(self, request):
-        """Billable input: the context once plus each question's text, options or levels as sent; for a
-        shared-pass checkpoint, the one model input (`context_tokens` holds it, `question_tokens` is empty)."""
-        if self.shared_trunk_pass:
-            return self._model_input(prepare_ask(request))
+        """Billable input: the context once plus each question's text, options or levels as sent. The same
+        for every model, whatever prompt format or number of passes it uses."""
         return bill(billable_ask(request), self)
 
     def bill_systemone(self, request):
-        if self.shared_trunk_pass:
-            return self._model_input(prepare_systemone(request))
         return bill(billable_systemone(request), self)
 
     def count_prepared(self, prepared):

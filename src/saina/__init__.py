@@ -1,7 +1,7 @@
 """Saina HTTP client and optional local model integrations."""
 from .client import (Saina, SainaError, SainaConnectionError, ResponseMetadata, ERROR_CLASSES,
                      DEFAULT_BASE_URL, new_idempotency_key)
-__version__ = '0.3.1'
+__version__ = '0.3.2'
 
 def register_transformers():
     from .transformers import register

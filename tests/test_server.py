@@ -113,13 +113,18 @@ class SharedPassRouteTests(unittest.TestCase):
             self.assertEqual([q['mode'] for q in scorer.calls[0]], ['single_label'] * 9 + ['multi_label', 'single_label', 'single_label'])
             self.assertEqual(scorer.calls[0][0]['choices'], ['a', 'b: B'])
             self.assertEqual(list(r.json()['answers']), list(questions))
-            self.assertEqual(r.json()['usage']['input_tokens'], 40)
+            # Billed for the text sent, like every model; the header reports the one model input.
+            # One token per word: the state {"a":1}, then 9 x (Q?, a, b, B), Tags? x y, OK?, How much? low high.
+            self.assertEqual(r.json()['usage']['input_tokens'], 45)
+            self.assertEqual(r.headers['x-saina-billable-tokens'], '45')
+            self.assertEqual(r.headers['x-saina-input-tokens'], '40')
             r = c.post('/v1/systemone', headers={'Authorization': 'Bearer k'}, json={'model': 'saina-helm-0.8b', 'state': 's',
                 'questions': {'u': {'type': 'noul', 'instructions': 'Urgent?'},
                               't': {'type': 'choice', 'instructions': 'Team?', 'criteria': {'a': None, 'b': None}}}})
             self.assertEqual(r.status_code, 200, r.text)
             self.assertEqual(len(scorer.calls), 2)
-            self.assertEqual(r.json()['usage']['input_tokens'], 40)
+            self.assertEqual(r.json()['usage']['input_tokens'], 5)  # s, Urgent?, Team?, a, b
+            self.assertEqual(r.headers['x-saina-input-tokens'], '40')
             ctx = c.get('/v1/models').json()['data'][0]['input_modalities'][0]['supported_inputs']['max_context_length']
             self.assertEqual(ctx['value'], 262144)
 

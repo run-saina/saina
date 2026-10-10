@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.2
+
+- **Helm 2 is billed for the text sent, like the original Helm.** In 0.3.0 and 0.3.1, a Helm 2 request was
+  billed for its one model input, prompt formatting included, so the same request cost about 7× more on
+  Helm 2 than on the original Helm. Now `usage.input_tokens`, `X-Saina-Billable-Tokens` and
+  `TokenCounter.bill_ask`/`bill_systemone` count the state once plus each question's text as sent, for every
+  model. `X-Saina-Input-Tokens` and `TokenCounter.count_*` still report model-input lengths for the metering
+  check.
+
 ## 0.3.1
 
 - **Apps embedded without the server's lifespan work again.** In 0.3.0, building `saina.server.create_app`
