@@ -7,9 +7,10 @@ The current model is not cleared for commercial distribution.
 The Apache-2.0 code license does not grant rights to third-party weights or data.
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/run-saina/saina/blob/main/examples/saina_colab.ipynb)
-Try Helm in [`examples/saina_colab.ipynb`](examples/saina_colab.ipynb): run the
-[Hugging Face weights](https://huggingface.co/run-saina/saina-helm-0.8b) locally through the SDK pipeline,
-or call [Replicate](https://replicate.com/run-saina/saina-helm-0.8b) or your own endpoint.
+Models: [Helm 2 0.8B](https://huggingface.co/run-saina/saina-helm-2-0.8b) (current) and the original
+[Helm 0.8B](https://huggingface.co/run-saina/saina-helm-0.8b). Try Helm in
+[`examples/saina_colab.ipynb`](examples/saina_colab.ipynb), run the weights locally through the SDK,
+or call [Replicate](https://replicate.com/run-saina/saina-helm-2-0.8b) or your own endpoint.
 
 ## Install
 
@@ -26,7 +27,7 @@ from saina import Saina
 client = Saina('https://your-endpoint.example', api_key='YOUR_KEY')
 
 result = client.ask(
-    model='helm-0.8b',
+    model='saina-helm',  # whichever Helm the endpoint serves; or pin 'helm-2-0.8b'
     state='I was charged twice.',
     questions={
         'issue': {
@@ -70,7 +71,34 @@ client.usage(from_='2026-10-01'); client.requests(limit=50)
 - **Credits** are 64-bit integers sent as decimal strings; Python returns `int`, JavaScript `BigInt`.
   `ask` still returns the same response dict; billing headers are in `ask_with_metadata` and `client.last_metadata`.
 
-## Transformers / local inference
+## Model names
+
+`saina-helm` selects whichever Helm the endpoint serves. Versioned names (`helm-2-0.8b` /
+`saina-helm-2-0.8b`, `helm-0.8b` / `saina-helm-0.8b`) only reach that exact model; an endpoint
+serving a different version answers `404`. Responses always name the model that answered.
+
+## Local inference
+
+`saina[local]` loads released checkpoints at a pinned Hub commit. Helm 2 checkpoints answer every
+question in a request from one backbone pass; the original Helm runs one pass per question.
+
+```python
+from saina.transformers import HelmModel
+
+helm = HelmModel.from_pretrained('run-saina/saina-helm-2-0.8b', revision='<40-hex commit>', device='cuda:0')
+answers = helm.ask(model='saina-helm', state='I was charged twice.', questions={
+    'refund': {'type': 'yes_no', 'question': 'Is a refund requested?'},
+    'issue': {'type': 'single_choice', 'question': 'Identify the banking issue.',
+              'options': {'duplicate': 'duplicate charge', 'delivery': 'card delivery'}},
+})
+```
+
+The context limit defaults to the checkpoint's trained limit; pass `max_length=` (or set
+`SAINA_MAX_LENGTH` for the server) to serve a lower limit that fits your GPU. Longer inputs are
+rejected, never truncated. Checkpoint formats newer than the installed package are refused with
+a request to upgrade.
+
+## Transformers pipeline
 
 ```python
 from saina import register_transformers
@@ -116,7 +144,13 @@ uvicorn saina.server:create_app --factory --host 127.0.0.1 --port 8000
 Native typed requests use `/v1/ask`. The `saina.contract` module owns their schema.
 `/v1/systemone` accepts the System One wire format (`noul`, `choice`, `score`) used by Jev
 clients and OpenRouter's Decisions API; `saina.jev` holds that adapter. `GET /v1/models` lists
-the served model in OpenRouter's provider format, `GET /healthz` reports the pinned revision and queue state, and `GET /livez` reports process liveness.
+the served models in OpenRouter's provider format, `GET /healthz` reports the pinned revisions and queue state, and `GET /livez` reports process liveness.
+
+One server can serve several releases: set `SAINA_MODELS` to comma-separated
+`checkpoint@revision[:max_length]` entries instead of `SAINA_CHECKPOINT`/`SAINA_REVISION`. The first is the
+default and answers `saina-helm`; versioned names reach only their model, and an unserved name answers
+`404 not_found` (System One labels the server does not know go to the default). All models share the same
+execution slots and queue.
 
 `SAINA_API_KEY` may hold several comma-separated keys, one per caller, so a single key can be
 revoked by removing it and restarting. Behind a TLS-terminating proxy (`X-Forwarded-Proto` or
@@ -149,12 +183,14 @@ the request never ran, so the clients retry it after `Retry-After`.
 
 ### Usage metering
 
-`usage.input_tokens` counts the text you send: the `state` once, plus each question and its options or
-levels (keys and descriptions). Strings count as sent; objects and arrays count as compact JSON in the
+For the original Helm, `usage.input_tokens` counts the text you send: the `state` once, plus each question
+and its options or levels (keys and descriptions). Strings count as sent; objects and arrays count as compact JSON in the
 order sent; each part is tokenized on its own with the pinned tokenizer. Prompt formatting the server adds,
 and re-reading the `state` for each question, are not counted. The responses' `X-Saina-Billable-Tokens`
 header repeats this number; `X-Saina-Input-Tokens` is the length of the token sequences actually fed to the
-model. `pip install 'saina[tokenize]'` installs `saina.tokenize.TokenCounter`, which computes both without
+model. Helm 2 reads the `state` and every question in one model input, and is billed for that input:
+`usage.input_tokens`, `X-Saina-Billable-Tokens` and `X-Saina-Input-Tokens` are then the same number.
+`pip install 'saina[tokenize]'` installs `saina.tokenize.TokenCounter`, which computes both without
 torch:
 
 ```python
@@ -164,7 +200,7 @@ from saina.contract import AskRequest
 counter = TokenCounter.from_checkpoint('run-saina/saina-helm-0.8b', revision='<pinned commit>')
 request = AskRequest.model_validate(body)
 counter.bill_ask(request).total  # usage.input_tokens
-counter.count_ask(request)       # model-input length per question (context-window limit)
+counter.count_ask(request)       # model-input length per forward pass (one for Helm 2)
 ```
 
 ### Behind a gateway

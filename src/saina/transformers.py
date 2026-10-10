@@ -20,7 +20,7 @@ class HelmModel(PreTrainedModel):
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *args, config=None,
-                        revision=None, device='cpu', max_length=16384, **kwargs):
+                        revision=None, device='cpu', max_length=None, **kwargs):
         from .loader import load_scorer
         if args:
             raise ValueError('Positional model arguments are not supported')
@@ -36,6 +36,12 @@ class HelmModel(PreTrainedModel):
         self.scorer.device = str(self.device)
         return {'probabilities': self.scorer.predict(
             request['input'], request['task'], request['choices'], mode=request['mode'])}
+
+    def ask(self, **request):
+        """Answer a native typed-question request; shared-pass checkpoints use one backbone call."""
+        from .contract import AskRequest, ask
+        self.scorer.device = str(self.device)
+        return ask(AskRequest.model_validate(request), self.scorer)
 
     def save_pretrained(self, *args, **kwargs):
         raise NotImplementedError('Use the Helm checkpoint staging exporter; generic saving would drop the Helm head')

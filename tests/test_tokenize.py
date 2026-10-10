@@ -47,6 +47,20 @@ class TokenCounterTests(unittest.TestCase):
         self.assertEqual(d.context_tokens, s.context_tokens)
         self.assertEqual(d.total, s.total + s.question_tokens[0])
 
+    def test_shared_pass_counts_and_bills_the_one_model_input(self):
+        from saina.contract import AskRequest
+        from saina.prompt import SHARED_PROMPT
+        from saina.tokenize import TokenCounter
+        shared = TokenCounter(self.counter.tokenizer, self.counter.codes, SHARED_PROMPT,
+                              ('single_label', 'multi_label'), max_length=262144)
+        request = AskRequest.model_validate({'model': 'saina-helm', 'state': 'Parcel arrived crushed.',
+            'questions': {f'q{i}': {'type': 'yes_no', 'question': f'Question {i}?'} for i in range(5)}})
+        counts = shared.count_ask(request)
+        self.assertEqual(len(counts), 1)
+        self.assertEqual(shared.bill_ask(request).total, counts[0])
+        self.assertLess(counts[0], sum(self.counter.count_ask(request)))  # the state is read once
+        self.assertTrue(shared.manifest()['shared_trunk_pass'])
+
     def test_manifest_pins_tokenizer(self):
         m = self.counter.manifest()
         self.assertRegex(m['tokenizer_sha256'], '^[0-9a-f]{64}$')

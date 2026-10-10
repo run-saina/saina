@@ -2,11 +2,29 @@
 import json
 from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from .errors import ModelNotServed
 from .prepare import billable_ask, execute, prepare_ask, validate_distribution  # noqa: F401 (re-exported)
 
 Content = str | dict[str, JsonValue] | list[JsonValue]
 Probability = Annotated[float, Field(ge=0, le=1, strict=True)]
-MODEL = 'helm-0.8b'
+LEGACY_MODEL_ID = 'saina-helm-0.8b'
+
+
+def short_name(model_id):
+    return model_id.removeprefix('saina-')
+
+
+def model_names(model_id):
+    """Names that select this model. Unversioned `saina-helm` means whichever Helm the
+    endpoint serves; versioned names only ever reach that exact model."""
+    return {model_id, short_name(model_id), 'saina-helm'}
+
+
+def served_model(scorer, requested):
+    model_id = getattr(scorer, 'model_id', LEGACY_MODEL_ID)
+    if requested not in model_names(model_id):
+        raise ModelNotServed(f'This endpoint serves {model_id}')
+    return model_id
 
 
 class StrictModel(BaseModel):
@@ -57,7 +75,7 @@ TypedQuestion = Annotated[YesNo | SingleChoice | Rating | MultiChoice, Field(dis
 
 
 class AskRequest(StrictModel):
-    model: Literal['helm-0.8b', 'saina-helm-0.8b', 'saina-helm']
+    model: Annotated[str, Field(min_length=1, max_length=64)]
     state: Content
     mode: Literal['distribution', 'decision'] = 'distribution'
     threshold: Probability = .8
@@ -181,16 +199,17 @@ def answer(request, q, labels, p):
     return result
 
 
-def respond(request, prepared, execution):
-    """Response body from an all-or-nothing execution; usage is the billable input (the text sent)."""
+def respond(request, prepared, execution, model_id=LEGACY_MODEL_ID):
+    """Response body from an all-or-nothing execution; usage is the billable input."""
     answers = {q.key: answer(request, request.questions[q.key], list(q.labels), p)
                for q, p in zip(prepared, execution.probabilities)}
-    return {'model': MODEL, 'answers': answers,
+    return {'model': short_name(model_id), 'answers': answers,
             'usage': {'input_tokens': execution.billable_tokens, 'output_tokens': 0}}
 
 
 def ask(request: AskRequest, scorer, expected_input_tokens=None):
+    model_id = served_model(scorer, request.model)
     # Encode and check capability for every question before any forward pass in a mixed request.
     prepared = prepare_ask(request)
     return respond(request, prepared, execute(prepared, scorer, billable_ask(request),
-                                              expected_input_tokens=expected_input_tokens))
+                                              expected_input_tokens=expected_input_tokens), model_id)

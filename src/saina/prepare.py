@@ -142,8 +142,18 @@ def check_capabilities(prepared, supported_modes):
         raise ValueError('Checkpoint does not declare trained multi-label support')
 
 
+def shared(encoder):
+    """Whether this scorer or counter answers every question from one pass over one prompt."""
+    return getattr(encoder, 'shared_trunk_pass', False) is True
+
+
 def encode_all(prepared, encoder):
-    """Encode every question before any inference, so a late invalid question fails the request early."""
+    """Every model input of the request, encoded before any inference, so a late invalid question fails
+    the request early: one input per question, or a single input for all of them on a shared-pass model."""
+    if shared(encoder):
+        if len({q.context for q in prepared}) != 1:
+            raise ValueError('A shared pass needs one context for every question')
+        return [list(encoder.encode_shared(prepared[0].context, [(q.question, q.choices, q.mode) for q in prepared]))]
     return [list(encoder.encode(q.context, q.question, q.choices, q.mode)) for q in prepared]
 
 
@@ -156,7 +166,7 @@ def validate_distribution(p, size, *, independent=False):
 @dataclass(frozen=True)
 class Execution:
     probabilities: list
-    input_tokens: list  # model-input length per question, for the metering check
+    input_tokens: list  # model-input length per forward pass, for the metering check
     billable_tokens: int  # what the request is billed for, reported as usage.input_tokens
 
     @property
@@ -168,21 +178,28 @@ def execute(prepared, scorer, billable, encoded=None, expected_input_tokens=None
     """Run every question and report both counts from what was actually encoded and sent.
 
     Counts are never read from mutable scorer state: each model-input count is the length of the
-    token sequence passed to `scorer.forward`, and the billable count comes from the request text.
-    `expected_input_tokens` checks model-input tokens. A request is all-or-nothing.
+    token sequence passed to the model (`scorer.forward` per question, or `scorer.forward_shared` once
+    for a shared-pass model), and the billable count comes from the request text.
+    `expected_input_tokens` checks model-input tokens. A shared-pass model is billed for its one model
+    input; other models are billed for the request text. A request is all-or-nothing.
     """
     check_capabilities(prepared, getattr(scorer, 'supported_modes', ('single_label',)))
     if encoded is None:
         encoded = encode_all(prepared, scorer)
-    billable_tokens = bill(billable, scorer).total
-    if len(encoded) != len(prepared):
+    # Shared-pass models bill the one model input they read; per-question models bill the text sent.
+    billable_tokens = None if shared(scorer) else bill(billable, scorer).total
+    if len(encoded) != (1 if shared(scorer) else len(prepared)):
         raise MeteringMismatch('Missing encoded input')
     counts = [len(ids) for ids in encoded]
     if expected_input_tokens is not None and sum(counts) != expected_input_tokens:
         raise MeteringMismatch('Encoded input does not match the expected token count')
-    probabilities = []
-    for q, ids in zip(prepared, encoded):
-        p = list(scorer.forward(ids, len(q.choices), q.mode))
+    if shared(scorer):
+        vectors = [list(p) for p in scorer.forward_shared(
+            encoded[0], [len(q.choices) for q in prepared], [q.mode for q in prepared])]
+        if len(vectors) != len(prepared):
+            raise ValueError('Model returned the wrong number of answers')
+    else:
+        vectors = [list(scorer.forward(ids, len(q.choices), q.mode)) for q, ids in zip(prepared, encoded)]
+    for q, p in zip(prepared, vectors):
         validate_distribution(p, len(q.labels), independent=q.mode == 'multi_label')
-        probabilities.append(p)
-    return Execution(probabilities, counts, billable_tokens)
+    return Execution(vectors, counts, sum(counts) if billable_tokens is None else billable_tokens)

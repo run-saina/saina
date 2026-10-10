@@ -8,8 +8,8 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from .prompt import PROMPT_FORMATS, answer_codes, encode
-from .prepare import bill, billable_ask, billable_systemone, prepare_ask, prepare_systemone, encode_all
+from .prompt import PROMPT_FORMATS, SHARED_PROMPT, answer_codes, encode, encode_shared_prompt
+from .prepare import Bill, bill, billable_ask, billable_systemone, prepare_ask, prepare_systemone, encode_all
 
 TOKENIZER_FILES = ['*.json', '*.txt', '*.model', '*.jinja', '*.tiktoken']
 
@@ -29,11 +29,13 @@ class TokenCounter:
         if prompt_format not in PROMPT_FORMATS:
             raise ValueError('Unsupported prompt format')
         self.tokenizer, self.codes, self.prompt_format = tokenizer, list(codes), prompt_format
+        # Shared-pass checkpoints read every question from one model input (see prepare.encode_all).
+        self.shared_trunk_pass = prompt_format == SHARED_PROMPT
         self.supported_modes = tuple(supported_modes)
         self.max_length, self.revision, self.tokenizer_sha256 = max_length, revision, tokenizer_sha256
 
     @classmethod
-    def from_checkpoint(cls, checkpoint, revision=None, max_length=8192):
+    def from_checkpoint(cls, checkpoint, revision=None, max_length=None):
         from transformers import AutoTokenizer
         root = Path(checkpoint)
         if not root.is_dir():
@@ -46,6 +48,8 @@ class TokenCounter:
         codes, code_ids = answer_codes(tokenizer)
         if codes != config['codes'] or code_ids != config['code_ids']:
             raise ValueError('Checkpoint answer codes do not match the pinned tokenizer')
+        # Default to the checkpoint's own context limit, like the inference server.
+        max_length = max_length if max_length is not None else config.get('max_length', 8192)
         return cls(tokenizer, codes, config['prompt'], config.get('supported_modes', ['single_label']),
                    max_length=max_length, revision=revision, tokenizer_sha256=_digest(root))
 
@@ -55,19 +59,35 @@ class TokenCounter:
         return encode(self.prompt_format, self.tokenizer, self.codes, context, question, list(choices),
                       self.max_length, mode)
 
+    def encode_shared(self, context, questions):
+        if any(mode not in self.supported_modes for _, _, mode in questions):
+            raise ValueError('Checkpoint does not declare trained multi-label support')
+        return encode_shared_prompt(self.tokenizer, self.codes, context,
+                                    [(q, list(c), m) for q, c, m in questions], self.max_length)
+
     def count_text(self, text):
         """Tokens in one billable text part, without special tokens or prompt formatting."""
         return len(self.tokenizer.encode(text, add_special_tokens=False)) if text else 0
 
+    def _model_input(self, prepared):
+        # A shared-pass model is billed for the one input it reads; it has no per-question split.
+        return Bill(sum(self.count_prepared(prepared)), ())
+
     def bill_ask(self, request):
-        """Billable input: the context once plus each question's text, options or levels as sent."""
+        """Billable input: the context once plus each question's text, options or levels as sent; for a
+        shared-pass checkpoint, the one model input (`context_tokens` holds it, `question_tokens` is empty)."""
+        if self.shared_trunk_pass:
+            return self._model_input(prepare_ask(request))
         return bill(billable_ask(request), self)
 
     def bill_systemone(self, request):
+        if self.shared_trunk_pass:
+            return self._model_input(prepare_systemone(request))
         return bill(billable_systemone(request), self)
 
     def count_prepared(self, prepared):
-        """Per-question model-input lengths (context-window limit and metering check, not billing);
+        """Model-input length per forward pass: one per question, or one for a shared-pass checkpoint
+        (context-window limit and metering check);
         raises before returning if any question is invalid."""
         return [len(ids) for ids in encode_all(prepared, self)]
 
@@ -78,6 +98,7 @@ class TokenCounter:
         return self.count_prepared(prepare_systemone(request))
 
     def manifest(self):
-        return {'prompt_format': self.prompt_format, 'revision': self.revision,
+        return {'prompt_format': self.prompt_format, 'shared_trunk_pass': self.shared_trunk_pass,
+                'revision': self.revision,
                 'tokenizer_sha256': self.tokenizer_sha256, 'max_length': self.max_length,
                 'supported_modes': list(self.supported_modes)}

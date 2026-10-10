@@ -61,3 +61,39 @@ class BillTests(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+class SharedPassExecutionTests(unittest.TestCase):
+    """Shared-pass models read every question from one model input, and are billed for that input."""
+
+    class Shared(Words):
+        shared_trunk_pass = True
+        supported_modes = ('single_label', 'multi_label')
+
+        def __init__(self):
+            self.passes = []
+
+        def encode(self, *args):
+            raise AssertionError('shared-pass models are never encoded per question')
+
+        def encode_shared(self, context, questions):
+            return list(range(10 * len(questions) + len(context)))
+
+        def forward_shared(self, ids, counts, modes):
+            self.passes.append(len(ids))
+            return [[1 / n] * n for n in counts]
+
+    def test_one_pass_one_count_and_billed_for_the_model_input(self):
+        from saina.prepare import MeteringMismatch, execute, prepare_ask
+        request = ask('a long shared state', {
+            'team': {'type': 'single_choice', 'question': 'Which team?', 'options': {'a': None, 'b': None}},
+            'tags': {'type': 'multi_choice', 'question': 'Tags?', 'options': {'x': None, 'y': None, 'z': None}}})
+        scorer = self.Shared()
+        execution = execute(prepare_ask(request), scorer, billable_ask(request))
+        self.assertEqual(scorer.passes, [39])
+        self.assertEqual(execution.input_tokens, [39])
+        self.assertEqual(execution.billable_tokens, 39)  # not the text-as-sent count of the request
+        self.assertNotEqual(bill(billable_ask(request), scorer).total, 39)
+        self.assertEqual(len(execution.probabilities), 2)
+        with self.assertRaises(MeteringMismatch):
+            execute(prepare_ask(request), scorer, billable_ask(request), expected_input_tokens=40)

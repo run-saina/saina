@@ -2,6 +2,7 @@
 import json
 from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from .contract import LEGACY_MODEL_ID
 from .prepare import billable_systemone, execute, prepare_systemone
 
 
@@ -55,14 +56,16 @@ def answer(q, labels, p):
     return result
 
 
-def respond(request, prepared, execution):
+def respond(request, prepared, execution, model_id=LEGACY_MODEL_ID):
     answers = {q.key: answer(request.questions[q.key], list(q.labels), p)
                for q, p in zip(prepared, execution.probabilities)}
-    return {'model': 'saina-helm-0.8b', 'answers': answers,
+    # Report the model that answered; System One callers send their own model labels.
+    return {'model': model_id, 'answers': answers,
             'usage': {'input_tokens': execution.billable_tokens, 'output_tokens': 0}}
 
 
 def evaluate(request, scorer, expected_input_tokens=None):
     prepared = prepare_systemone(request)
     return respond(request, prepared, execute(prepared, scorer, billable_systemone(request),
-                                              expected_input_tokens=expected_input_tokens))
+                                              expected_input_tokens=expected_input_tokens),
+                   getattr(scorer, 'model_id', LEGACY_MODEL_ID))

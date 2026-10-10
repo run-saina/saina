@@ -73,6 +73,158 @@ class FakeScorer:
         return [1 / count] * count if mode == 'multi_label' else [0.7] + [0.3 / (count - 1)] * (count - 1)
 
 
+class SharedFakeScorer(FakeScorer):
+    shared_trunk_pass = True
+    max_length = 262144
+
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+
+    def encode(self, *args, **kwargs):
+        raise AssertionError('shared scorers must not be encoded per question')
+
+    def forward(self, *args, **kwargs):
+        raise AssertionError('shared scorers must not be called per question')
+
+    def encode_shared(self, context, questions):
+        self.encoded = [{'question': q, 'choices': list(c), 'mode': m} for q, c, m in questions]
+        return list(range(40))  # one model input for every question
+
+    def forward_shared(self, ids, counts, modes):
+        self.calls.append(self.encoded)
+        return [FakeScorer.forward(self, ids, n, m) for n, m in zip(counts, modes)]
+
+
+@unittest.skipUnless(HAVE_FASTAPI, 'fastapi and httpx required')
+class SharedPassRouteTests(unittest.TestCase):
+    def test_one_call_for_all_questions_on_both_routes(self):
+        scorer = SharedFakeScorer()
+        questions = {f'q{i}': {'type': 'single_choice', 'question': f'Q{i}?', 'options': {'a': None, 'b': 'B'}}
+                     for i in range(9)}
+        questions['tags'] = {'type': 'multi_choice', 'question': 'Tags?', 'options': {'x': None, 'y': None}}
+        questions['ok'] = {'type': 'yes_no', 'question': 'OK?'}
+        questions['level'] = {'type': 'rating', 'question': 'How much?', 'levels': ['low', 'high']}
+        with TestClient(create_app(scorer=scorer, api_key='k')) as c:
+            r = c.post('/v1/ask', json={'model': 'helm-0.8b', 'state': {'a': 1}, 'questions': questions},
+                       headers={'Authorization': 'Bearer k'})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(len(scorer.calls), 1)
+            self.assertEqual([q['mode'] for q in scorer.calls[0]], ['single_label'] * 9 + ['multi_label', 'single_label', 'single_label'])
+            self.assertEqual(scorer.calls[0][0]['choices'], ['a', 'b: B'])
+            self.assertEqual(list(r.json()['answers']), list(questions))
+            self.assertEqual(r.json()['usage']['input_tokens'], 40)
+            r = c.post('/v1/systemone', headers={'Authorization': 'Bearer k'}, json={'model': 'saina-helm-0.8b', 'state': 's',
+                'questions': {'u': {'type': 'noul', 'instructions': 'Urgent?'},
+                              't': {'type': 'choice', 'instructions': 'Team?', 'criteria': {'a': None, 'b': None}}}})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(len(scorer.calls), 2)
+            self.assertEqual(r.json()['usage']['input_tokens'], 40)
+            ctx = c.get('/v1/models').json()['data'][0]['input_modalities'][0]['supported_inputs']['max_context_length']
+            self.assertEqual(ctx['value'], 262144)
+
+
+@unittest.skipUnless(HAVE_FASTAPI, 'fastapi and httpx required')
+class ModelNameTests(unittest.TestCase):
+    def post(self, scorer, model):
+        with TestClient(create_app(scorer=scorer, api_key='k')) as c:
+            return c.post('/v1/ask', headers={'Authorization': 'Bearer k'}, json={'model': model, 'state': 's',
+                'questions': {'ok': {'type': 'yes_no', 'question': 'OK?'}}})
+
+    def test_unversioned_alias_reaches_the_served_model_and_versions_are_exact(self):
+        helm2 = SharedFakeScorer(); helm2.model_id = 'saina-helm-2-0.8b'
+        for model in ('saina-helm', 'helm-2-0.8b', 'saina-helm-2-0.8b'):
+            r = self.post(helm2, model)
+            self.assertEqual(r.status_code, 200, model)
+            self.assertEqual(r.json()['model'], 'helm-2-0.8b')
+        for model in ('helm-0.8b', 'saina-helm-0.8b', 'other'):
+            r = self.post(helm2, model)
+            self.assertEqual(r.status_code, 404, model)
+            self.assertEqual(r.json()['error']['code'], 'not_found')
+            self.assertIn('saina-helm-2-0.8b', r.json()['detail'])
+        legacy = FakeScorer()
+        self.assertEqual(self.post(legacy, 'saina-helm').json()['model'], 'helm-0.8b')
+        self.assertEqual(self.post(legacy, 'helm-2-0.8b').status_code, 404)
+
+    def test_health_and_listing_name_the_loaded_model(self):
+        helm2 = SharedFakeScorer(); helm2.model_id = 'saina-helm-2-0.8b'
+        with TestClient(create_app(scorer=helm2, api_key='k')) as c:
+            self.assertEqual(c.get('/healthz').json()['model'], 'saina-helm-2-0.8b')
+            m = c.get('/v1/models').json()['data'][0]
+            self.assertEqual((m['id'], m['hugging_face_id']), ('saina-helm-2-0.8b', 'run-saina/saina-helm-2-0.8b'))
+            r = c.post('/v1/systemone', headers={'Authorization': 'Bearer k'}, json={'model': 'anything', 'state': 's',
+                'questions': {'u': {'type': 'noul', 'instructions': 'Urgent?'}}})
+            self.assertEqual(r.json()['model'], 'saina-helm-2-0.8b')
+
+
+@unittest.skipUnless(HAVE_FASTAPI, 'fastapi and httpx required')
+class TwoModelTests(unittest.TestCase):
+    def setUp(self):
+        self.helm2 = SharedFakeScorer(); self.helm2.model_id, self.helm2.revision = 'saina-helm-2-0.8b', 'b' * 40
+        self.legacy = FakeScorer(); self.legacy.revision = 'a' * 40; self.legacy.max_length = 8192
+        self.app = create_app(scorers=[self.helm2, self.legacy], api_key='k')
+
+    def ask(self, c, model, route='/v1/ask'):
+        body = ({'model': model, 'state': 's', 'questions': {'ok': {'type': 'yes_no', 'question': 'OK?'}}}
+                if route == '/v1/ask' else
+                {'model': model, 'state': 's', 'questions': {'u': {'type': 'noul', 'instructions': 'Urgent?'}}})
+        return c.post(route, headers={'Authorization': 'Bearer k'}, json=body)
+
+    def test_names_route_to_the_right_model(self):
+        with TestClient(self.app) as c:
+            for model, answered in (('saina-helm', 'helm-2-0.8b'), ('helm-2-0.8b', 'helm-2-0.8b'),
+                                    ('saina-helm-2-0.8b', 'helm-2-0.8b'), ('helm-0.8b', 'helm-0.8b'),
+                                    ('saina-helm-0.8b', 'helm-0.8b')):
+                r = self.ask(c, model)
+                self.assertEqual((r.status_code, r.json()['model']), (200, answered), model)
+            self.assertEqual(self.legacy.forwards, 2)
+            self.assertEqual(len(self.helm2.calls), 3)
+            self.assertEqual(self.ask(c, 'helm-3-0.8b').status_code, 404)
+            # System One: known names route, other labels reach the default.
+            self.assertEqual(self.ask(c, 'saina-helm-0.8b', '/v1/systemone').json()['model'], 'saina-helm-0.8b')
+            self.assertEqual(self.ask(c, 'openrouter/saina', '/v1/systemone').json()['model'], 'saina-helm-2-0.8b')
+
+    def test_health_and_listing_cover_both(self):
+        with TestClient(self.app) as c:
+            h = c.get('/healthz').json()
+            self.assertEqual((h['model'], h['revision']), ('saina-helm-2-0.8b', 'b' * 40))
+            self.assertEqual(h['models'], [{'model': 'saina-helm-2-0.8b', 'revision': 'b' * 40},
+                                           {'model': 'saina-helm-0.8b', 'revision': 'a' * 40}])
+            data = c.get('/v1/models').json()['data']
+            self.assertEqual([m['id'] for m in data], ['saina-helm-2-0.8b', 'saina-helm-0.8b'])
+            self.assertEqual([m['input_modalities'][0]['supported_inputs']['max_context_length']['value'] for m in data],
+                             [262144, 8192])
+
+    def test_models_share_the_bounded_queue(self):
+        # One GPU: every served model waits for the same execution slots.
+        with TestClient(self.app) as c:
+            executor = c.app.state.executor
+            for _ in range(executor.slots + executor.depth):
+                executor.reserve()
+            try:
+                for model in ('saina-helm', 'helm-0.8b'):
+                    r = self.ask(c, model)
+                    self.assertEqual((r.status_code, r.json()['error']['code']), (429, 'overloaded'), model)
+            finally:
+                for _ in range(executor.slots + executor.depth):
+                    executor.release()
+            self.assertEqual(self.ask(c, 'helm-0.8b').status_code, 200)
+
+    def test_duplicate_releases_are_refused(self):
+        other = SharedFakeScorer(); other.model_id = 'saina-helm-2-0.8b'
+        with self.assertRaisesRegex(RuntimeError, 'different release'):
+            with TestClient(create_app(scorers=[self.helm2, other], api_key='k')):
+                pass
+
+    def test_models_spec(self):
+        from saina.server import parse_models
+        self.assertEqual(parse_models('run-saina/saina-helm-2-0.8b@' + 'b' * 40 + ':32768, /models/old@' + 'a' * 40),
+                         [('run-saina/saina-helm-2-0.8b', 'b' * 40, 32768), ('/models/old', 'a' * 40, None)])
+        for bad in ('', 'x@r:big', '@r'):
+            with self.assertRaises(ValueError):
+                parse_models(bad)
+
+
 @unittest.skipUnless(HAVE_FASTAPI, 'fastapi and httpx required')
 class RouteTests(unittest.TestCase):
     def app(self, api_key='k1, k2', **kwargs):

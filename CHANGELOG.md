@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0
+
+Helm 2 support. Requires no changes from 0.2.0 callers of the original Helm.
+
+- **Helm 2 checkpoints** (`run-saina/saina-helm-2-0.8b`): every question in a request is answered from one
+  backbone pass over one model input, with routed expert heads. Checkpoint formats newer than the installed
+  package are refused with a request to upgrade.
+- **Helm 2 billing:** a Helm 2 request is billed for the one model input it reads, so `usage.input_tokens`,
+  `X-Saina-Billable-Tokens` and `X-Saina-Input-Tokens` agree. The original Helm is still billed for the text
+  sent. `TokenCounter` prices both the same way the server does.
+- **Model names:** `saina-helm` reaches whichever Helm an endpoint serves; versioned names (`helm-2-0.8b`,
+  `saina-helm-2-0.8b`, `helm-0.8b`, `saina-helm-0.8b`) only reach that model, otherwise `404 not_found`.
+  Responses name the model that answered.
+- **Several models per server:** `SAINA_MODELS=checkpoint@revision[:max_length],...`; the first is the
+  default. All models share the bounded queue.
+- **Context limit** defaults to the checkpoint's trained limit (262,144 tokens for Helm 2, 8,192 for the
+  original Helm) instead of a fixed 8,192; `SAINA_MAX_LENGTH` or `max_length=` sets a lower serving limit.
+
 ## 0.2.0
 
 Behavior changes for self-hosted servers:

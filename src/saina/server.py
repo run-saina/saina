@@ -1,9 +1,11 @@
-"""Authenticated inference API with a bounded queue. Run with uvicorn's factory option.
+"""Authenticated inference API serving one or more Helm models through a bounded queue.
+Run with uvicorn's factory option.
 
 Concurrency: requests wait in a bounded FIFO queue for a fixed number of execution slots
 (default one). A full queue rejects promptly with `429 overloaded`; a queued request that
 waits longer than the queue timeout is dropped before it runs. A slot is released only when
-its model work has actually finished, never when a client disconnects.
+its model work has actually finished, never when a client disconnects. Every served model shares
+the same execution slots.
 """
 import asyncio
 from concurrent.futures import CancelledError as JobCancelled, ThreadPoolExecutor
@@ -18,9 +20,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from . import __version__
-from .errors import InputTooLong
+from .errors import InputTooLong, ModelNotServed
 from .loader import load_scorer
-from .contract import AskRequest, AskResponse, billable_ask, prepare_ask, respond as respond_ask
+from .contract import (LEGACY_MODEL_ID, AskRequest, AskResponse, billable_ask, model_names, prepare_ask,
+                       respond as respond_ask)
 from .jev import SystemOneRequest, billable_systemone, prepare_systemone, respond as respond_systemone
 from .prepare import MeteringMismatch, check_capabilities, encode_all, execute
 
@@ -139,8 +142,49 @@ def _keys(value):
     return [k.strip().encode() for k in (value or '').split(',') if k.strip()]
 
 
+# Public listing details per released model (OpenRouter provider format).
+CATALOG = {
+    'saina-helm-0.8b': {'name': 'Saina: Helm 0.8B', 'created': 1791331200,
+                        'hugging_face_id': 'run-saina/saina-helm-0.8b'},
+    'saina-helm-2-0.8b': {'name': 'Saina: Helm 2 0.8B', 'created': 1791590400,
+                          'hugging_face_id': 'run-saina/saina-helm-2-0.8b'},
+}
+
+
+def model_id(scorer):
+    return getattr(scorer, 'model_id', LEGACY_MODEL_ID)
+
+
+def parse_models(spec):
+    """SAINA_MODELS: comma-separated `checkpoint@revision[:max_length]`; the first is the default.
+
+    `checkpoint` is a Hub repo (revision required) or a local staged directory."""
+    models = []
+    for item in (part.strip() for part in spec.split(',')):
+        if not item:
+            continue
+        checkpoint, _, rest = item.partition('@')
+        revision, _, limit = rest.partition(':')
+        if not checkpoint or (limit and not limit.isdigit()):
+            raise ValueError(f'Invalid SAINA_MODELS entry: {item!r}')
+        models.append((checkpoint, revision or None, int(limit) if limit else None))
+    if not models:
+        raise ValueError('SAINA_MODELS lists no models')
+    return models
+
+
+def load_models(loader=load_scorer):
+    env = os.environ.get
+    device = env('SAINA_DEVICE', 'cpu')
+    if env('SAINA_MODELS'):
+        return [loader(c, revision=r, device=device, max_length=m) for c, r, m in parse_models(env('SAINA_MODELS'))]
+    # Without SAINA_MAX_LENGTH the checkpoint's own context limit applies.
+    return [loader(env('SAINA_CHECKPOINT'), revision=env('SAINA_REVISION'), device=device,
+                   max_length=int(env('SAINA_MAX_LENGTH')) if env('SAINA_MAX_LENGTH') else None)]
+
+
 def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
-               execution_slots=None, queue_depth=None, queue_timeout=None, scorer_loader=None):
+               execution_slots=None, queue_depth=None, queue_timeout=None, scorer_loader=None, scorers=None):
     env = os.environ.get
     # One key per self-hosted caller, comma-separated, so a key can be revoked without rotating the rest.
     keys = _keys(api_key if api_key is not None else env('SAINA_API_KEY', ''))
@@ -155,11 +199,22 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
 
     @asynccontextmanager
     async def lifespan(app):
-        app.state.scorer = scorer or (scorer_loader or load_scorer)(env('SAINA_CHECKPOINT'),
-            revision=env('SAINA_REVISION'), device=env('SAINA_DEVICE', 'cpu'),
-            max_length=int(env('SAINA_MAX_LENGTH', '8192')))
+        loaded = list(scorers) if scorers else [scorer] if scorer is not None else load_models(scorer_loader or load_scorer)
+        ids = [model_id(s) for s in loaded]
+        if len(set(ids)) != len(ids):
+            raise RuntimeError('Each served model must be a different release')
+        # The first model is the default: it answers the unversioned `saina-helm` name.
+        app.state.scorers, app.state.scorer = loaded, loaded[0]
         yield
         executor.shutdown()
+
+    def pick(name, fallback=False):
+        for s in app.state.scorers:
+            if name != 'saina-helm' and name in model_names(model_id(s)):
+                return s
+        if name == 'saina-helm' or fallback:
+            return app.state.scorer
+        raise ApiError(404, 'not_found', 'This endpoint serves ' + ', '.join(map(model_id, app.state.scorers)))
 
     app = FastAPI(title='Saina Helm', version=__version__, lifespan=lifespan)
     app.state.executor = executor
@@ -241,13 +296,12 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
             raise
         return future.result()
 
-    async def serve(request, kind, prepared, billable, respond):
+    async def serve(request, kind, prepared, billable, respond, model):
         # Metering headers are honored only from the gateway's service token.
         trusted = kind == 'service'
         request_id = request.headers.get('x-saina-request-id') if trusted else None
         expected = int_header(request, 'x-saina-expected-input-tokens') if trusted else None
         deadline_ms = int_header(request, 'x-saina-deadline-ms') if trusted else None
-        model = app.state.scorer
         try:
             check_capabilities(prepared, getattr(model, 'supported_modes', ('single_label',)))
             # Take a queue place before tokenizing, so a full queue rejects without encoding anything.
@@ -271,6 +325,8 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
             # Dropped before running (expired, or cancelled by the gateway): nothing ran.
             raise ApiError(503, 'overloaded', 'Request expired in the inference queue', {'Retry-After': '1'},
                            NOT_ADMITTED) from None
+        except ModelNotServed as e:
+            raise ApiError(404, 'not_found', str(e)) from None
         except MeteringMismatch:
             raise ApiError(409, 'metering_mismatch', 'Encoded input does not match the expected token count') from None
         except InputTooLong:
@@ -280,7 +336,7 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
         except Exception:
             # Errors never carry request content.
             raise ApiError(500, 'inference_failed', 'Inference failed') from None
-        body = respond(prepared, execution)
+        body = respond(prepared, execution, model_id(model))
         # X-Saina-Input-Tokens is the model-input length the gateway's metering check compares;
         # X-Saina-Billable-Tokens (and usage.input_tokens) is what the request is billed for.
         headers = {'X-Saina-Input-Tokens': str(execution.total_input_tokens),
@@ -297,46 +353,60 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
     @app.get('/healthz')
     def health():
         # The pinned revision is public, so callers can verify which weights answered them.
-        return {'status': 'ready', 'model': 'saina-helm-0.8b', 'version': __version__,
-                'revision': env('SAINA_REVISION') or None, 'queue': executor.stats()}
+        default = app.state.scorer
+        health = {'status': 'ready', 'model': model_id(default), 'version': __version__,
+                  'revision': getattr(default, 'revision', None) or env('SAINA_REVISION') or None,
+                  'queue': executor.stats()}
+        if len(app.state.scorers) > 1:
+            health['models'] = [{'model': model_id(s), 'revision': getattr(s, 'revision', None)}
+                                for s in app.state.scorers]
+        return health
 
     @app.get('/v1/models')
     def models():
         # Model listing in OpenRouter's provider format (schema 2.4). Public: no secrets in it.
         # SAINA_PROMPT_PRICE_USD is the per-token input price as a string; unset means unpriced.
         price = env('SAINA_PROMPT_PRICE_USD')
-        text = {'type': 'text', 'supported_inputs': {
-            'max_context_length': {'value': int(env('SAINA_MAX_LENGTH', '8192')), 'unit': 'token'}}}
-        if price:
-            text['pricing'] = [{'type': 'prompt', 'unit': 'token', 'cost_usd': price}]
-        return {'data': [{
-            'schema_version': '2.4',
-            'id': 'saina-helm-0.8b',
-            'name': 'Saina: Helm 0.8B',
-            'hugging_face_id': 'run-saina/saina-helm-0.8b',
-            'created': 1791331200,
-            'quantization': 'bf16',
-            'description': ('Saina Helm is an open 0.8B decision model for workflow automation. It reads a state and '
-                            'answers typed questions (noul, choice, score) with a probability for every option, '
-                            'instead of generating text.'),
-            'input_modalities': [text],
-            'output_modalities': [{'type': 'decisions', 'supported_parameters': {}}],
-            'capacity': [{'type': 'request', 'unit': 'request', 'per': 'minute', 'value': 300}],
-            'is_ready': True,
-            'datacenters': [{'country_code': env('SAINA_COUNTRY', 'CA')}],
-        }]}
+
+        def listing(scorer):
+            # The limit the model enforces: the checkpoint's unless configured lower.
+            limit = getattr(scorer, 'max_length', None) or int(env('SAINA_MAX_LENGTH', '8192'))
+            text = {'type': 'text', 'supported_inputs': {
+                'max_context_length': {'value': limit, 'unit': 'token'}}}
+            if price:
+                text['pricing'] = [{'type': 'prompt', 'unit': 'token', 'cost_usd': price}]
+            known = CATALOG.get(model_id(scorer), {'name': 'Saina: ' + model_id(scorer), 'created': 0,
+                                                   'hugging_face_id': 'run-saina/' + model_id(scorer)})
+            return {
+                'schema_version': '2.4',
+                'id': model_id(scorer),
+                **known,
+                'quantization': 'bf16',
+                'description': ('Saina Helm is an open 0.8B decision model for workflow automation. It reads a state and '
+                                'answers typed questions (noul, choice, score) with a probability for every option, '
+                                'instead of generating text.'),
+                'input_modalities': [text],
+                'output_modalities': [{'type': 'decisions', 'supported_parameters': {}}],
+                'capacity': [{'type': 'request', 'unit': 'request', 'per': 'minute', 'value': 300}],
+                'is_ready': True,
+                'datacenters': [{'country_code': env('SAINA_COUNTRY', 'CA')}],
+            }
+        return {'data': [listing(s) for s in app.state.scorers]}
 
     @app.post('/v1/ask', response_model=AskResponse, response_model_exclude_unset=True)
     async def native_questions(body: AskRequest, request: Request, kind: str = Depends(caller)):
         result, headers = await serve(request, kind, prepare_ask(body), billable_ask(body),
-                                      lambda prepared, execution: respond_ask(body, prepared, execution))
+                                      lambda prepared, execution, mid: respond_ask(body, prepared, execution, mid),
+                                      pick(body.model))
         return JSONResponse(AskResponse.model_validate(result).model_dump(exclude_unset=True), headers=headers)
 
     @app.post('/v1/systemone')
     async def system_one(body: SystemOneRequest, request: Request, kind: str = Depends(caller)):
         # TypeSafe System One wire format, as used by Jev clients and OpenRouter's Decisions API.
+        # System One callers send their own model labels; unknown labels reach the default model.
         result, headers = await serve(request, kind, prepare_systemone(body), billable_systemone(body),
-                                      lambda prepared, execution: respond_systemone(body, prepared, execution))
+                                      lambda prepared, execution, mid: respond_systemone(body, prepared, execution, mid),
+                                      pick(body.model, fallback=True))
         return JSONResponse(result, headers=headers)
 
     @app.delete('/v1/internal/requests/{request_id}', dependencies=[Depends(service_only)])
