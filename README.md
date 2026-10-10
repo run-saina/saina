@@ -7,9 +7,10 @@ The current model is not cleared for commercial distribution.
 The Apache-2.0 code license does not grant rights to third-party weights or data.
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/run-saina/saina/blob/main/examples/saina_colab.ipynb)
-Try Helm in [`examples/saina_colab.ipynb`](examples/saina_colab.ipynb): run the
-[Hugging Face weights](https://huggingface.co/run-saina/saina-helm-0.8b) locally through the SDK pipeline,
-or call [Replicate](https://replicate.com/run-saina/saina-helm-0.8b) or your own endpoint.
+Models: [Helm 2 0.8B](https://huggingface.co/run-saina/saina-helm-2-0.8b) (current) and the original
+[Helm 0.8B](https://huggingface.co/run-saina/saina-helm-0.8b). Try Helm in
+[`examples/saina_colab.ipynb`](examples/saina_colab.ipynb), run the weights locally through the SDK,
+or call [Replicate](https://replicate.com/run-saina/saina-helm-2-0.8b) or your own endpoint.
 
 ## Install
 
@@ -26,7 +27,7 @@ from saina import Saina
 client = Saina('https://your-endpoint.example', api_key='YOUR_KEY')
 
 result = client.ask(
-    model='helm-0.8b',
+    model='saina-helm',  # whichever Helm the endpoint serves; or pin 'helm-2-0.8b'
     state='I was charged twice.',
     questions={
         'issue': {
@@ -43,7 +44,34 @@ result = client.ask(
 
 Keep credentials in environment variables or a secret manager, not source files.
 
-## Transformers / local inference
+## Model names
+
+`saina-helm` selects whichever Helm the endpoint serves. Versioned names (`helm-2-0.8b` /
+`saina-helm-2-0.8b`, `helm-0.8b` / `saina-helm-0.8b`) only reach that exact model; an endpoint
+serving a different version answers `404`. Responses always name the model that answered.
+
+## Local inference
+
+`saina[local]` loads released checkpoints at a pinned Hub commit. Helm 2 checkpoints answer every
+question in a request from one backbone pass; the original Helm runs one pass per question.
+
+```python
+from saina.transformers import HelmModel
+
+helm = HelmModel.from_pretrained('run-saina/saina-helm-2-0.8b', revision='<40-hex commit>', device='cuda:0')
+answers = helm.ask(model='saina-helm', state='I was charged twice.', questions={
+    'refund': {'type': 'yes_no', 'question': 'Is a refund requested?'},
+    'issue': {'type': 'single_choice', 'question': 'Identify the banking issue.',
+              'options': {'duplicate': 'duplicate charge', 'delivery': 'card delivery'}},
+})
+```
+
+The context limit defaults to the checkpoint's trained limit; pass `max_length=` (or set
+`SAINA_MAX_LENGTH` for the server) to serve a lower limit that fits your GPU. Longer inputs are
+rejected, never truncated. Checkpoint formats newer than the installed package are refused with
+a request to upgrade.
+
+## Transformers pipeline
 
 ```python
 from saina import register_transformers

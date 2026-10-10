@@ -8,10 +8,19 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from .errors import InputTooLong
+from .errors import InputTooLong, ModelNotServed
 from .loader import load_scorer
-from .contract import AskRequest, AskResponse, ask
+from .contract import LEGACY_MODEL_ID, AskRequest, AskResponse, ask
 from .jev import SystemOneRequest, evaluate
+
+
+# Public listing details per released model (OpenRouter provider format).
+CATALOG = {
+    'saina-helm-0.8b': {'name': 'Saina: Helm 0.8B', 'created': 1791331200,
+                        'hugging_face_id': 'run-saina/saina-helm-0.8b'},
+    'saina-helm-2-0.8b': {'name': 'Saina: Helm 2 0.8B', 'created': 1791590400,
+                          'hugging_face_id': 'run-saina/saina-helm-2-0.8b'},
+}
 
 
 def create_app(scorer=None, api_key=None, cors_origins=None):
@@ -26,10 +35,10 @@ def create_app(scorer=None, api_key=None, cors_origins=None):
     async def lifespan(app):
         app.state.scorer = scorer or load_scorer(os.environ['SAINA_CHECKPOINT'],
             revision=os.environ.get('SAINA_REVISION'), device=os.environ.get('SAINA_DEVICE', 'cpu'),
-            max_length=int(os.environ.get('SAINA_MAX_LENGTH', '8192')))
+            max_length=int(os.environ['SAINA_MAX_LENGTH']) if os.environ.get('SAINA_MAX_LENGTH') else None)
         yield
 
-    app = FastAPI(title='Saina Helm', version='0.1.2', lifespan=lifespan)
+    app = FastAPI(title='Saina Helm', version='0.2.0', lifespan=lifespan)
     if cors_origins is None:
         cors_origins = os.environ.get('SAINA_CORS_ORIGINS', 'https://saina.run')
     if isinstance(cors_origins, str):
@@ -65,6 +74,8 @@ def create_app(scorer=None, api_key=None, cors_origins=None):
             raise HTTPException(503, 'Model is busy', headers={'Retry-After': '1'})
         try:
             return run(app.state.scorer)
+        except ModelNotServed as e:
+            raise HTTPException(404, str(e)) from None
         except InputTooLong:
             raise HTTPException(422, 'Input exceeds model context window') from None
         except ValueError:
@@ -83,7 +94,7 @@ def create_app(scorer=None, api_key=None, cors_origins=None):
     @app.get('/healthz')
     def health():
         # The pinned revision is public, so callers can verify which weights answered them.
-        return {'status': 'ready', 'model': 'saina-helm-0.8b',
+        return {'status': 'ready', 'model': getattr(app.state.scorer, 'model_id', LEGACY_MODEL_ID),
                 'revision': os.environ.get('SAINA_REVISION') or None}
 
     @app.get('/v1/models')
@@ -91,16 +102,19 @@ def create_app(scorer=None, api_key=None, cors_origins=None):
         # Model listing in OpenRouter's provider format (schema 2.4). Public: no secrets in it.
         # SAINA_PROMPT_PRICE_USD is the per-token input price as a string; unset means unpriced.
         price = os.environ.get('SAINA_PROMPT_PRICE_USD')
+        # The limit the loaded model enforces, which is the checkpoint's unless SAINA_MAX_LENGTH lowers it.
+        limit = getattr(app.state.scorer, 'max_length', None) or int(os.environ.get('SAINA_MAX_LENGTH', '8192'))
         text = {'type': 'text', 'supported_inputs': {
-            'max_context_length': {'value': int(os.environ.get('SAINA_MAX_LENGTH', '8192')), 'unit': 'token'}}}
+            'max_context_length': {'value': limit, 'unit': 'token'}}}
         if price:
             text['pricing'] = [{'type': 'prompt', 'unit': 'token', 'cost_usd': price}]
+        model_id = getattr(app.state.scorer, 'model_id', LEGACY_MODEL_ID)
+        listing = CATALOG.get(model_id, {'name': 'Saina: ' + model_id, 'created': 0,
+                                         'hugging_face_id': 'run-saina/' + model_id})
         return {'data': [{
             'schema_version': '2.4',
-            'id': 'saina-helm-0.8b',
-            'name': 'Saina: Helm 0.8B',
-            'hugging_face_id': 'run-saina/saina-helm-0.8b',
-            'created': 1791331200,
+            'id': model_id,
+            **listing,
             'quantization': 'bf16',
             'description': ('Saina Helm is an open 0.8B decision model for workflow automation. It reads a state and '
                             'answers typed questions (noul, choice, score) with a probability for every option, '

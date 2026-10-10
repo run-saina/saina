@@ -3,10 +3,28 @@ import json
 import math
 from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from .errors import ModelNotServed
 
 Content = str | dict[str, JsonValue] | list[JsonValue]
 Probability = Annotated[float, Field(ge=0, le=1, strict=True)]
-MODEL = 'helm-0.8b'
+LEGACY_MODEL_ID = 'saina-helm-0.8b'
+
+
+def short_name(model_id):
+    return model_id.removeprefix('saina-')
+
+
+def model_names(model_id):
+    """Names that select this model. Unversioned `saina-helm` means whichever Helm the
+    endpoint serves; versioned names only ever reach that exact model."""
+    return {model_id, short_name(model_id), 'saina-helm'}
+
+
+def served_model(scorer, requested):
+    model_id = getattr(scorer, 'model_id', LEGACY_MODEL_ID)
+    if requested not in model_names(model_id):
+        raise ModelNotServed(f'This endpoint serves {model_id}')
+    return model_id
 
 
 class StrictModel(BaseModel):
@@ -57,7 +75,7 @@ TypedQuestion = Annotated[YesNo | SingleChoice | Rating | MultiChoice, Field(dis
 
 
 class AskRequest(StrictModel):
-    model: Literal['helm-0.8b', 'saina-helm-0.8b', 'saina-helm']
+    model: Annotated[str, Field(min_length=1, max_length=64)]
     state: Content
     mode: Literal['distribution', 'decision'] = 'distribution'
     threshold: Probability = .8
@@ -149,19 +167,39 @@ def decision_reason(p, threshold, min_margin=0):
             else 'below_margin' if margin < min_margin else 'accepted')
 
 
+def score_questions(scorer, context, items):
+    """items: [(question, choices, mode)]. Returns (probability vectors in order, input tokens).
+
+    Shared-pass checkpoints answer all questions from one backbone call over one prompt;
+    legacy checkpoints run one call per question, as before."""
+    if getattr(scorer, 'shared_trunk_pass', False) is True:
+        vectors = scorer.predict_questions(context, [
+            {'question': question, 'choices': choices, 'mode': mode} for question, choices, mode in items])
+        if len(vectors) != len(items):
+            raise ValueError('Model returned the wrong number of answers')
+        return [list(v) for v in vectors], getattr(scorer, 'last_input_tokens', 0)
+    vectors, tokens = [], 0
+    for question, choices, mode in items:
+        kwargs = {'mode': mode} if mode != 'single_label' else {}
+        vectors.append(list(scorer.predict(context, question, choices, **kwargs)))
+        tokens += getattr(scorer, 'last_input_tokens', 0)
+    return vectors, tokens
+
+
 def ask(request: AskRequest, scorer):
+    model_id = served_model(scorer, request.model)
     # Check capability before any forward passes in a mixed request.
     if any(q.type == 'multi_choice' for q in request.questions.values()):
         if 'multi_label' not in getattr(scorer, 'supported_modes', ['single_label']):
             raise ValueError('Checkpoint does not declare trained multi-label support')
-    answers, input_tokens = {}, 0
-    for key, q in request.questions.items():
-        labels, choices = question_options(q)
+    entries = [(key, q, *question_options(q)) for key, q in request.questions.items()]
+    vectors, input_tokens = score_questions(scorer, render(request.state), [
+        (render(q.question), choices, 'multi_label' if q.type == 'multi_choice' else 'single_label')
+        for _, q, _, choices in entries])
+    answers = {}
+    for (key, q, labels, _), p in zip(entries, vectors):
         independent = q.type == 'multi_choice'
-        kwargs = {'mode': 'multi_label'} if independent else {}
-        p = list(scorer.predict(render(request.state), render(q.question), choices, **kwargs))
         validate_distribution(p, len(labels), independent=independent)
-        input_tokens += getattr(scorer, 'last_input_tokens', 0)
         n, peak = len(p), max(range(len(p)), key=p.__getitem__)
         answer = {'type': q.type}
         if independent:
@@ -195,5 +233,5 @@ def ask(request: AskRequest, scorer):
                 else:
                     answer['level'] = peak if selected else None
         answers[key] = answer
-    return {'model': MODEL, 'answers': answers,
+    return {'model': short_name(model_id), 'answers': answers,
             'usage': {'input_tokens': input_tokens, 'output_tokens': 0}}

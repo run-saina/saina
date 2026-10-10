@@ -55,6 +55,82 @@ class FakeScorer:
         return [1 / n] * n if mode == 'multi_label' else [0.7] + [0.3 / (n - 1)] * (n - 1)
 
 
+class SharedFakeScorer(FakeScorer):
+    shared_trunk_pass = True
+    max_length = 262144
+
+    def __init__(self):
+        self.calls = []
+
+    def predict(self, *args, **kwargs):
+        raise AssertionError('shared scorers must not be called per question')
+
+    def predict_questions(self, context, questions, temperature=1.0):
+        self.calls.append(questions)
+        self.last_input_tokens = 40
+        return [FakeScorer.predict(self, context, q['question'], q['choices'], mode=q['mode']) for q in questions]
+
+
+@unittest.skipUnless(HAVE_FASTAPI, 'fastapi and httpx required')
+class SharedPassRouteTests(unittest.TestCase):
+    def test_one_call_for_all_questions_on_both_routes(self):
+        scorer = SharedFakeScorer()
+        questions = {f'q{i}': {'type': 'single_choice', 'question': f'Q{i}?', 'options': {'a': None, 'b': 'B'}}
+                     for i in range(9)}
+        questions['tags'] = {'type': 'multi_choice', 'question': 'Tags?', 'options': {'x': None, 'y': None}}
+        questions['ok'] = {'type': 'yes_no', 'question': 'OK?'}
+        questions['level'] = {'type': 'rating', 'question': 'How much?', 'levels': ['low', 'high']}
+        with TestClient(create_app(scorer=scorer, api_key='k')) as c:
+            r = c.post('/v1/ask', json={'model': 'helm-0.8b', 'state': {'a': 1}, 'questions': questions},
+                       headers={'Authorization': 'Bearer k'})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(len(scorer.calls), 1)
+            self.assertEqual([q['mode'] for q in scorer.calls[0]], ['single_label'] * 9 + ['multi_label', 'single_label', 'single_label'])
+            self.assertEqual(scorer.calls[0][0]['choices'], ['a', 'b: B'])
+            self.assertEqual(list(r.json()['answers']), list(questions))
+            self.assertEqual(r.json()['usage']['input_tokens'], 40)
+            r = c.post('/v1/systemone', headers={'Authorization': 'Bearer k'}, json={'model': 'saina-helm-0.8b', 'state': 's',
+                'questions': {'u': {'type': 'noul', 'instructions': 'Urgent?'},
+                              't': {'type': 'choice', 'instructions': 'Team?', 'criteria': {'a': None, 'b': None}}}})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(len(scorer.calls), 2)
+            self.assertEqual(r.json()['usage']['input_tokens'], 40)
+            ctx = c.get('/v1/models').json()['data'][0]['input_modalities'][0]['supported_inputs']['max_context_length']
+            self.assertEqual(ctx['value'], 262144)
+
+
+@unittest.skipUnless(HAVE_FASTAPI, 'fastapi and httpx required')
+class ModelNameTests(unittest.TestCase):
+    def post(self, scorer, model):
+        with TestClient(create_app(scorer=scorer, api_key='k')) as c:
+            return c.post('/v1/ask', headers={'Authorization': 'Bearer k'}, json={'model': model, 'state': 's',
+                'questions': {'ok': {'type': 'yes_no', 'question': 'OK?'}}})
+
+    def test_unversioned_alias_reaches_the_served_model_and_versions_are_exact(self):
+        helm2 = SharedFakeScorer(); helm2.model_id = 'saina-helm-2-0.8b'
+        for model in ('saina-helm', 'helm-2-0.8b', 'saina-helm-2-0.8b'):
+            r = self.post(helm2, model)
+            self.assertEqual(r.status_code, 200, model)
+            self.assertEqual(r.json()['model'], 'helm-2-0.8b')
+        for model in ('helm-0.8b', 'saina-helm-0.8b', 'other'):
+            r = self.post(helm2, model)
+            self.assertEqual(r.status_code, 404, model)
+            self.assertIn('saina-helm-2-0.8b', r.json()['detail'])
+        legacy = FakeScorer()
+        self.assertEqual(self.post(legacy, 'saina-helm').json()['model'], 'helm-0.8b')
+        self.assertEqual(self.post(legacy, 'helm-2-0.8b').status_code, 404)
+
+    def test_health_and_listing_name_the_loaded_model(self):
+        helm2 = SharedFakeScorer(); helm2.model_id = 'saina-helm-2-0.8b'
+        with TestClient(create_app(scorer=helm2, api_key='k')) as c:
+            self.assertEqual(c.get('/healthz').json()['model'], 'saina-helm-2-0.8b')
+            m = c.get('/v1/models').json()['data'][0]
+            self.assertEqual((m['id'], m['hugging_face_id']), ('saina-helm-2-0.8b', 'run-saina/saina-helm-2-0.8b'))
+            r = c.post('/v1/systemone', headers={'Authorization': 'Bearer k'}, json={'model': 'anything', 'state': 's',
+                'questions': {'u': {'type': 'noul', 'instructions': 'Urgent?'}}})
+            self.assertEqual(r.json()['model'], 'saina-helm-2-0.8b')
+
+
 @unittest.skipUnless(HAVE_FASTAPI, 'fastapi and httpx required')
 class RouteTests(unittest.TestCase):
     def app(self, api_key='k1, k2'):

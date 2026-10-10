@@ -3,6 +3,7 @@ import json
 import math
 from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from .contract import LEGACY_MODEL_ID, score_questions
 
 
 def render(value):
@@ -40,8 +41,7 @@ class SystemOneRequest(BaseModel):
 
 
 def evaluate(request, scorer):
-    answers = {}
-    input_tokens = 0
+    entries = []
     for key, q in request.questions.items():
         if q.type == 'noul':
             criteria = q.criteria or {}
@@ -53,11 +53,13 @@ def evaluate(request, scorer):
             values = list(q.criteria.values()) if q.type == 'choice' else q.criteria
             choices = [label if value is None else f'{label}: {render(value)}'
                        for label, value in zip(labels, values)]
-        context, question = render(request.state), render(q.instructions)
-        p = list(scorer.predict(context, question, choices))
+        entries.append((key, q, labels, choices))
+    vectors, input_tokens = score_questions(scorer, render(request.state), [
+        (render(q.instructions), choices, 'single_label') for _, q, _, choices in entries])
+    answers = {}
+    for (key, q, labels, _), p in zip(entries, vectors):
         if len(p) != len(labels) or any(not math.isfinite(x) or not 0 <= x <= 1 for x in p) or not math.isclose(sum(p), 1, abs_tol=1e-5):
             raise ValueError('Invalid probability distribution')
-        input_tokens += getattr(scorer, 'last_input_tokens', 0)
         n, peak = len(p), max(range(len(p)), key=p.__getitem__)
         if q.type == 'noul':
             answer = {'type': 'noul', 'noul': p[0]}
@@ -72,5 +74,6 @@ def evaluate(request, scorer):
                               legend={str(i): render(v) for i, v in enumerate(q.criteria)})
             answer['confidence'] = max(0., min(1., confidence))
         answers[key] = answer
-    return {'model': 'saina-helm-0.8b', 'answers': answers,
+    # Report the model that answered; System One callers send their own model labels.
+    return {'model': getattr(scorer, 'model_id', LEGACY_MODEL_ID), 'answers': answers,
             'usage': {'input_tokens': input_tokens, 'output_tokens': 0}}
