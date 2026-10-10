@@ -61,6 +61,11 @@ class TokenCounterTests(unittest.TestCase):
         self.assertLess(counts[0], sum(self.counter.count_ask(request)))  # the state is read once
         self.assertTrue(shared.manifest()['shared_trunk_pass'])
 
+    def test_counter_names_its_release(self):
+        # Checkpoints from before releases named themselves count for the original Helm.
+        self.assertEqual(self.counter.model_id, 'saina-helm-0.8b')
+        self.assertEqual(self.counter.manifest()['model'], 'saina-helm-0.8b')
+
     def test_manifest_pins_tokenizer(self):
         m = self.counter.manifest()
         self.assertRegex(m['tokenizer_sha256'], '^[0-9a-f]{64}$')

@@ -9,6 +9,7 @@ import json
 import re
 from pathlib import Path
 from .prompt import PROMPT_FORMATS, SHARED_PROMPT, answer_codes, encode, encode_shared_prompt
+from .loader import LEGACY_MODEL_ID, checkpoint_model_id
 from .prepare import Bill, bill, billable_ask, billable_systemone, prepare_ask, prepare_systemone, encode_all
 
 TOKENIZER_FILES = ['*.json', '*.txt', '*.model', '*.jinja', '*.tiktoken']
@@ -25,7 +26,7 @@ def _digest(root):
 
 class TokenCounter:
     def __init__(self, tokenizer, codes, prompt_format, supported_modes, max_length=8192,
-                 revision=None, tokenizer_sha256=None):
+                 revision=None, tokenizer_sha256=None, model_id=LEGACY_MODEL_ID):
         if prompt_format not in PROMPT_FORMATS:
             raise ValueError('Unsupported prompt format')
         self.tokenizer, self.codes, self.prompt_format = tokenizer, list(codes), prompt_format
@@ -33,6 +34,7 @@ class TokenCounter:
         self.shared_trunk_pass = prompt_format == SHARED_PROMPT
         self.supported_modes = tuple(supported_modes)
         self.max_length, self.revision, self.tokenizer_sha256 = max_length, revision, tokenizer_sha256
+        self.model_id = model_id  # the release this counter prices, as the server names it
 
     @classmethod
     def from_checkpoint(cls, checkpoint, revision=None, max_length=None):
@@ -51,7 +53,8 @@ class TokenCounter:
         # Default to the checkpoint's own context limit, like the inference server.
         max_length = max_length if max_length is not None else config.get('max_length', 8192)
         return cls(tokenizer, codes, config['prompt'], config.get('supported_modes', ['single_label']),
-                   max_length=max_length, revision=revision, tokenizer_sha256=_digest(root))
+                   max_length=max_length, revision=revision, tokenizer_sha256=_digest(root),
+                   model_id=checkpoint_model_id(root))
 
     def encode(self, context, question, choices, mode='single_label'):
         if mode not in self.supported_modes:
@@ -98,7 +101,7 @@ class TokenCounter:
         return self.count_prepared(prepare_systemone(request))
 
     def manifest(self):
-        return {'prompt_format': self.prompt_format, 'shared_trunk_pass': self.shared_trunk_pass,
+        return {'model': self.model_id, 'prompt_format': self.prompt_format, 'shared_trunk_pass': self.shared_trunk_pass,
                 'revision': self.revision,
                 'tokenizer_sha256': self.tokenizer_sha256, 'max_length': self.max_length,
                 'supported_modes': list(self.supported_modes)}

@@ -3,11 +3,11 @@ import json
 from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 from .errors import ModelNotServed
+from .loader import LEGACY_MODEL_ID  # noqa: F401 (re-exported)
 from .prepare import billable_ask, execute, prepare_ask, validate_distribution  # noqa: F401 (re-exported)
 
 Content = str | dict[str, JsonValue] | list[JsonValue]
 Probability = Annotated[float, Field(ge=0, le=1, strict=True)]
-LEGACY_MODEL_ID = 'saina-helm-0.8b'
 
 
 def short_name(model_id):

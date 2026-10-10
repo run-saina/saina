@@ -7,6 +7,7 @@ from .prompt import (SHARED_PROMPT, answer_codes, encode, encode_agentic_prompt,
                      encode_head_prompt, encode_shared_prompt, shared_positions)
 
 CHECKPOINT_FORMATS = (1, 2)
+LEGACY_MODEL_ID = 'saina-helm-0.8b'  # checkpoints from before releases named themselves
 
 
 class FrozenHeadScorer:
@@ -167,7 +168,7 @@ def checkpoint_format(path):
 def checkpoint_model_id(path):
     # Releases name themselves; checkpoints from before naming are the original Helm 0.8B.
     package = json.loads((path / 'config.json').read_text()) if (path / 'config.json').is_file() else {}
-    model_id = package.get('saina_model', 'saina-helm-0.8b')
+    model_id = package.get('saina_model', LEGACY_MODEL_ID)
     if not isinstance(model_id, str) or not re.fullmatch(r'saina-helm(-[0-9]+)?-[0-9.]+b', model_id):
         raise ValueError('Invalid saina_model name in checkpoint config')
     return model_id
