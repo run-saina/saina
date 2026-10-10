@@ -208,13 +208,25 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
         yield
         executor.shutdown()
 
+    def served():
+        """Served models, default first. Apps embedded without running the lifespan (tests, other
+        frameworks) work too: they may set `app.state.scorer`/`scorers` or pass them to create_app."""
+        listed = getattr(app.state, 'scorers', None) or (list(scorers) if scorers else None)
+        if listed:
+            return list(listed)
+        single = getattr(app.state, 'scorer', None) or scorer
+        if single is None:
+            raise ApiError(503, 'inference_unavailable', 'No model is loaded', {'Retry-After': '1'}, NOT_ADMITTED)
+        return [single]
+
     def pick(name, fallback=False):
-        for s in app.state.scorers:
+        models = served()
+        for s in models:
             if name != 'saina-helm' and name in model_names(model_id(s)):
                 return s
         if name == 'saina-helm' or fallback:
-            return app.state.scorer
-        raise ApiError(404, 'not_found', 'This endpoint serves ' + ', '.join(map(model_id, app.state.scorers)))
+            return models[0]
+        raise ApiError(404, 'not_found', 'This endpoint serves ' + ', '.join(map(model_id, models)))
 
     app = FastAPI(title='Saina Helm', version=__version__, lifespan=lifespan)
     app.state.executor = executor
@@ -353,13 +365,14 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
     @app.get('/healthz')
     def health():
         # The pinned revision is public, so callers can verify which weights answered them.
-        default = app.state.scorer
+        models = served()
+        default = models[0]
         health = {'status': 'ready', 'model': model_id(default), 'version': __version__,
                   'revision': getattr(default, 'revision', None) or env('SAINA_REVISION') or None,
                   'queue': executor.stats()}
-        if len(app.state.scorers) > 1:
+        if len(models) > 1:
             health['models'] = [{'model': model_id(s), 'revision': getattr(s, 'revision', None)}
-                                for s in app.state.scorers]
+                                for s in models]
         return health
 
     @app.get('/v1/models')
@@ -391,7 +404,7 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
                 'is_ready': True,
                 'datacenters': [{'country_code': env('SAINA_COUNTRY', 'CA')}],
             }
-        return {'data': [listing(s) for s in app.state.scorers]}
+        return {'data': [listing(s) for s in served()]}
 
     @app.post('/v1/ask', response_model=AskResponse, response_model_exclude_unset=True)
     async def native_questions(body: AskRequest, request: Request, kind: str = Depends(caller)):

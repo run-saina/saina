@@ -400,6 +400,39 @@ class MeteringAndQueueTests(unittest.TestCase):
             create_app(scorer=FakeScorer(), api_key='', service_token='')
 
 
+@unittest.skipUnless(HAVE_FASTAPI, 'fastapi and httpx required')
+class WithoutLifespanTests(unittest.TestCase):
+    """Embedders that never run the app's lifespan (a bare TestClient, another framework) still work."""
+    AUTH = {'Authorization': 'Bearer k'}
+
+    def check(self, app, model='saina-helm-0.8b', answered='saina-helm-0.8b'):
+        c = TestClient(app)  # not a context manager: the lifespan never runs
+        r = c.post('/v1/ask', headers=self.AUTH, json={**ASK, 'model': model})
+        self.assertEqual((r.status_code, r.json().get('model')), (200, answered), r.text)
+        self.assertEqual(c.get('/healthz').json()['model'], answered)
+        self.assertEqual(c.get('/v1/models').json()['data'][0]['id'], answered)
+
+    def test_scorer_set_on_app_state(self):
+        app = create_app(api_key='k')
+        app.state.scorer = FakeScorer()  # the 0.2 way of injecting a model
+        self.check(app)
+
+    def test_scorer_passed_to_create_app(self):
+        self.check(create_app(scorer=FakeScorer(), api_key='k'))
+
+    def test_several_scorers_passed_to_create_app(self):
+        helm2 = SharedFakeScorer(); helm2.model_id = 'saina-helm-2-0.8b'
+        app = create_app(scorers=[helm2, FakeScorer()], api_key='k')
+        self.check(app, 'saina-helm', 'saina-helm-2-0.8b')  # the first model is the default
+        r = TestClient(app).post('/v1/ask', headers=self.AUTH, json=ASK)
+        self.assertEqual((r.status_code, r.json()['model']), (200, 'saina-helm-0.8b'))
+
+    def test_no_model_is_unavailable_not_a_crash(self):
+        r = TestClient(create_app(api_key='k')).post('/v1/ask', headers=self.AUTH, json=ASK)
+        self.assertEqual((r.status_code, r.json()['error']['code']), (503, 'inference_unavailable'))
+        self.assertFalse(r.json()['error']['admitted'])
+
+
 class BoundedExecutorTests(unittest.TestCase):
     def test_full_queue_rejects_promptly_and_slot_held_until_work_finishes(self):
         import threading

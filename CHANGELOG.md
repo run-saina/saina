@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1
+
+- **Apps embedded without the server's lifespan work again.** In 0.3.0, building `saina.server.create_app`
+  without running its lifespan (a bare `TestClient`, another ASGI framework) failed with `AttributeError`,
+  because the served models were only set there. Models passed to `create_app(scorer=...)` or
+  `create_app(scorers=[...])`, or set on `app.state.scorer` as in 0.2, are now used directly. With no model at
+  all, requests get `503 inference_unavailable` (not admitted, safe to retry) instead of a server error.
+- The JavaScript client is also 0.3.1: its types list release names only (`saina-helm-2-0.8b`, not
+  `helm-2-0.8b`).
+
 ## 0.3.0
 
 Helm 2 support. Requires no changes from 0.2.0 callers of the original Helm.
