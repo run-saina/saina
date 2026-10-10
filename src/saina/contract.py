@@ -2,7 +2,7 @@
 import json
 from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
-from .prepare import execute, prepare_ask, validate_distribution  # noqa: F401 (re-exported)
+from .prepare import billable_ask, execute, prepare_ask, validate_distribution  # noqa: F401 (re-exported)
 
 Content = str | dict[str, JsonValue] | list[JsonValue]
 Probability = Annotated[float, Field(ge=0, le=1, strict=True)]
@@ -182,14 +182,15 @@ def answer(request, q, labels, p):
 
 
 def respond(request, prepared, execution):
-    """Response body from an all-or-nothing execution; usage is the encoded input length."""
+    """Response body from an all-or-nothing execution; usage is the billable input (the text sent)."""
     answers = {q.key: answer(request, request.questions[q.key], list(q.labels), p)
                for q, p in zip(prepared, execution.probabilities)}
     return {'model': MODEL, 'answers': answers,
-            'usage': {'input_tokens': execution.total_input_tokens, 'output_tokens': 0}}
+            'usage': {'input_tokens': execution.billable_tokens, 'output_tokens': 0}}
 
 
 def ask(request: AskRequest, scorer, expected_input_tokens=None):
     # Encode and check capability for every question before any forward pass in a mixed request.
     prepared = prepare_ask(request)
-    return respond(request, prepared, execute(prepared, scorer, expected_input_tokens=expected_input_tokens))
+    return respond(request, prepared, execute(prepared, scorer, billable_ask(request),
+                                              expected_input_tokens=expected_input_tokens))

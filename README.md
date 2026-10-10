@@ -149,23 +149,29 @@ the request never ran, so the clients retry it after `Retry-After`.
 
 ### Usage metering
 
-`usage.input_tokens` is the total length of the exact token sequences fed to the model, one per question,
-so a shared `state` is counted once for every question. `pip install 'saina[tokenize]'` installs
-`saina.tokenize.TokenCounter`, which counts the same tokens without torch:
+`usage.input_tokens` counts the text you send: the `state` once, plus each question and its options or
+levels (keys and descriptions). Strings count as sent; objects and arrays count as compact JSON in the
+order sent; each part is tokenized on its own with the pinned tokenizer. Prompt formatting the server adds,
+and re-reading the `state` for each question, are not counted. The responses' `X-Saina-Billable-Tokens`
+header repeats this number; `X-Saina-Input-Tokens` is the length of the token sequences actually fed to the
+model. `pip install 'saina[tokenize]'` installs `saina.tokenize.TokenCounter`, which computes both without
+torch:
 
 ```python
 from saina.tokenize import TokenCounter
 from saina.contract import AskRequest
 
 counter = TokenCounter.from_checkpoint('run-saina/saina-helm-0.8b', revision='<pinned commit>')
-counter.count_ask(AskRequest.model_validate(body))  # per-question input tokens
+request = AskRequest.model_validate(body)
+counter.bill_ask(request).total  # usage.input_tokens
+counter.count_ask(request)       # model-input length per question (context-window limit)
 ```
 
 ### Behind a gateway
 
 A gateway authenticates with `SAINA_SERVICE_TOKEN` (comma-separated tokens allowed) instead of a caller key.
-Only that token may send `X-Saina-Request-Id`, `X-Saina-Expected-Input-Tokens` (the server refuses with
-`409 metering_mismatch` before running if its own count differs) and `X-Saina-Deadline-Ms` (absolute Unix
+Only that token may send `X-Saina-Request-Id`, `X-Saina-Expected-Input-Tokens` (model-input tokens; the server
+refuses with `409 metering_mismatch` before running if its own count differs) and `X-Saina-Deadline-Ms` (absolute Unix
 milliseconds after which queued work is dropped), and call `DELETE /v1/internal/requests/{request_id}` to drop
 queued work it abandoned. Bind the server to a private interface in this setup.
 

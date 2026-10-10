@@ -65,6 +65,9 @@ class FakeScorer:
             raise InputTooLong('too long')
         return list(range(7))
 
+    def count_text(self, text):
+        return len(text.split())  # one token per word: billable counts are easy to read in assertions
+
     def forward(self, ids, count, mode='single_label'):
         self.forwards += 1
         return [1 / count] * count if mode == 'multi_label' else [0.7] + [0.3 / (count - 1)] * (count - 1)
@@ -97,7 +100,9 @@ class RouteTests(unittest.TestCase):
             self.assertAlmostEqual(a['urgent']['noul'], 0.7)
             self.assertEqual(a['team']['choice'], 'billing')
             self.assertIn('score', a['severity'])
-            self.assertEqual(r.json()['usage'], {'input_tokens': 21, 'output_tokens': 0})
+            # Billed on the text sent: state 6 + urgent 3 + team 2+4 + severity 2+3 words; the model read 3 × 7.
+            self.assertEqual(r.json()['usage'], {'input_tokens': 20, 'output_tokens': 0})
+            self.assertEqual(r.headers['X-Saina-Input-Tokens'], '21')
             bad = c.post('/v1/systemone', json={**body, 'questions': {'x': {'type': 'choice', 'instructions': 'q', 'criteria': {'only': None}}}},
                          headers={'Authorization': 'Bearer k1'})
             self.assertEqual(bad.status_code, 422)
@@ -145,10 +150,13 @@ class MeteringAndQueueTests(unittest.TestCase):
         self.scorer = kwargs.pop('scorer', None) or FakeScorer()
         return create_app(scorer=self.scorer, api_key='k', service_token='svc', **kwargs)
 
-    def test_usage_is_the_encoded_length_of_every_question(self):
+    def test_usage_is_billable_input_and_header_is_model_input(self):
         with TestClient(self.app()) as c:
             r = c.post('/v1/ask', json=ASK, headers={'Authorization': 'Bearer k'})
-        self.assertEqual(r.json()['usage'], {'input_tokens': 14, 'output_tokens': 0})
+        # Billed: 'Charged twice.' once (2) + 'Which team?' billing tech (4) + 'Urgent?' (1).
+        self.assertEqual(r.json()['usage'], {'input_tokens': 7, 'output_tokens': 0})
+        self.assertEqual(r.headers['X-Saina-Billable-Tokens'], '7')
+        # The model read two 7-token prompts; the gateway's metering check compares this one.
         self.assertEqual(r.headers['X-Saina-Input-Tokens'], '14')
         self.assertNotIn('X-Saina-Queue-Ms', r.headers)
 

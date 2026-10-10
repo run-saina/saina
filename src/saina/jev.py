@@ -2,7 +2,7 @@
 import json
 from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
-from .prepare import execute, prepare_systemone
+from .prepare import billable_systemone, execute, prepare_systemone
 
 
 def render(value):
@@ -59,9 +59,10 @@ def respond(request, prepared, execution):
     answers = {q.key: answer(request.questions[q.key], list(q.labels), p)
                for q, p in zip(prepared, execution.probabilities)}
     return {'model': 'saina-helm-0.8b', 'answers': answers,
-            'usage': {'input_tokens': execution.total_input_tokens, 'output_tokens': 0}}
+            'usage': {'input_tokens': execution.billable_tokens, 'output_tokens': 0}}
 
 
 def evaluate(request, scorer, expected_input_tokens=None):
     prepared = prepare_systemone(request)
-    return respond(request, prepared, execute(prepared, scorer, expected_input_tokens=expected_input_tokens))
+    return respond(request, prepared, execute(prepared, scorer, billable_systemone(request),
+                                              expected_input_tokens=expected_input_tokens))

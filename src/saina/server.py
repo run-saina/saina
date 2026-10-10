@@ -20,8 +20,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from . import __version__
 from .errors import InputTooLong
 from .loader import load_scorer
-from .contract import AskRequest, AskResponse, prepare_ask, respond as respond_ask
-from .jev import SystemOneRequest, prepare_systemone, respond as respond_systemone
+from .contract import AskRequest, AskResponse, billable_ask, prepare_ask, respond as respond_ask
+from .jev import SystemOneRequest, billable_systemone, prepare_systemone, respond as respond_systemone
 from .prepare import MeteringMismatch, check_capabilities, encode_all, execute
 
 
@@ -241,7 +241,7 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
             raise
         return future.result()
 
-    async def serve(request, kind, prepared, respond):
+    async def serve(request, kind, prepared, billable, respond):
         # Metering headers are honored only from the gateway's service token.
         trusted = kind == 'service'
         request_id = request.headers.get('x-saina-request-id') if trusted else None
@@ -258,7 +258,7 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
                 encoded = await asyncio.to_thread(encode_all, prepared, model)
                 if expected is not None and sum(map(len, encoded)) != expected:
                     raise MeteringMismatch()
-                future, timing = executor.submit(lambda: execute(prepared, model, encoded), reserved=True,
+                future, timing = executor.submit(lambda: execute(prepared, model, billable, encoded), reserved=True,
                     request_id=request_id, deadline=deadline_ms / 1000 if deadline_ms else None)
                 submitted = True
             finally:
@@ -281,7 +281,10 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
             # Errors never carry request content.
             raise ApiError(500, 'inference_failed', 'Inference failed') from None
         body = respond(prepared, execution)
-        headers = {'X-Saina-Input-Tokens': str(execution.total_input_tokens)}
+        # X-Saina-Input-Tokens is the model-input length the gateway's metering check compares;
+        # X-Saina-Billable-Tokens (and usage.input_tokens) is what the request is billed for.
+        headers = {'X-Saina-Input-Tokens': str(execution.total_input_tokens),
+                   'X-Saina-Billable-Tokens': str(execution.billable_tokens)}
         if trusted:
             headers.update({'X-Saina-Queue-Ms': str(timing.get('queue_ms', 0)),
                             'X-Saina-Exec-Ms': str(timing.get('exec_ms', 0))})
@@ -325,14 +328,14 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
 
     @app.post('/v1/ask', response_model=AskResponse, response_model_exclude_unset=True)
     async def native_questions(body: AskRequest, request: Request, kind: str = Depends(caller)):
-        result, headers = await serve(request, kind, prepare_ask(body),
+        result, headers = await serve(request, kind, prepare_ask(body), billable_ask(body),
                                       lambda prepared, execution: respond_ask(body, prepared, execution))
         return JSONResponse(AskResponse.model_validate(result).model_dump(exclude_unset=True), headers=headers)
 
     @app.post('/v1/systemone')
     async def system_one(body: SystemOneRequest, request: Request, kind: str = Depends(caller)):
         # TypeSafe System One wire format, as used by Jev clients and OpenRouter's Decisions API.
-        result, headers = await serve(request, kind, prepare_systemone(body),
+        result, headers = await serve(request, kind, prepare_systemone(body), billable_systemone(body),
                                       lambda prepared, execution: respond_systemone(body, prepared, execution))
         return JSONResponse(result, headers=headers)
 
