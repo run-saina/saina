@@ -227,6 +227,6 @@ def load_scorer(checkpoint, revision=None, device='cpu', max_length=None):
         model_id = checkpoint_model_id(path)
         scorer_class = SharedHeadScorer if checkpoint_format(path) == 2 else FrozenHeadScorer
         scorer = scorer_class(path, device=device, max_length=max_length)
-        scorer.model_id = model_id
+        scorer.model_id, scorer.revision = model_id, revision
         return scorer
     raise ValueError('Expected a staged Helm checkpoint with head-config.json')

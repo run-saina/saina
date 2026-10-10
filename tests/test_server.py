@@ -132,6 +132,77 @@ class ModelNameTests(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_FASTAPI, 'fastapi and httpx required')
+class TwoModelTests(unittest.TestCase):
+    def setUp(self):
+        self.helm2 = SharedFakeScorer(); self.helm2.model_id, self.helm2.revision = 'saina-helm-2-0.8b', 'b' * 40
+        self.legacy = FakeScorer(); self.legacy.revision = 'a' * 40
+        self.legacy.predict = self.counted(self.legacy.predict)
+        self.app = create_app(scorers=[self.helm2, self.legacy], api_key='k')
+
+    def counted(self, predict):
+        self.legacy_calls = 0
+        def run(*args, **kwargs):
+            self.legacy_calls += 1
+            return predict(*args, **kwargs)
+        return run
+
+    def ask(self, c, model, route='/v1/ask'):
+        body = ({'model': model, 'state': 's', 'questions': {'ok': {'type': 'yes_no', 'question': 'OK?'}}}
+                if route == '/v1/ask' else
+                {'model': model, 'state': 's', 'questions': {'u': {'type': 'noul', 'instructions': 'Urgent?'}}})
+        return c.post(route, headers={'Authorization': 'Bearer k'}, json=body)
+
+    def test_names_route_to_the_right_model(self):
+        with TestClient(self.app) as c:
+            for model, answered in (('saina-helm', 'helm-2-0.8b'), ('helm-2-0.8b', 'helm-2-0.8b'),
+                                    ('saina-helm-2-0.8b', 'helm-2-0.8b'), ('helm-0.8b', 'helm-0.8b'),
+                                    ('saina-helm-0.8b', 'helm-0.8b')):
+                r = self.ask(c, model)
+                self.assertEqual((r.status_code, r.json()['model']), (200, answered), model)
+            self.assertEqual(self.legacy_calls, 2)
+            self.assertEqual(len(self.helm2.calls), 3)
+            self.assertEqual(self.ask(c, 'helm-3-0.8b').status_code, 404)
+            # System One: known names route, other labels reach the default.
+            self.assertEqual(self.ask(c, 'saina-helm-0.8b', '/v1/systemone').json()['model'], 'saina-helm-0.8b')
+            self.assertEqual(self.ask(c, 'openrouter/saina', '/v1/systemone').json()['model'], 'saina-helm-2-0.8b')
+
+    def test_health_and_listing_cover_both(self):
+        with TestClient(self.app) as c:
+            h = c.get('/healthz').json()
+            self.assertEqual((h['model'], h['revision']), ('saina-helm-2-0.8b', 'b' * 40))
+            self.assertEqual(h['models'], [{'model': 'saina-helm-2-0.8b', 'revision': 'b' * 40},
+                                           {'model': 'saina-helm-0.8b', 'revision': 'a' * 40}])
+            data = c.get('/v1/models').json()['data']
+            self.assertEqual([m['id'] for m in data], ['saina-helm-2-0.8b', 'saina-helm-0.8b'])
+            self.assertEqual([m['input_modalities'][0]['supported_inputs']['max_context_length']['value'] for m in data],
+                             [262144, 8192])
+
+    def test_busy_model_does_not_block_the_other(self):
+        with TestClient(self.app) as c:
+            lock = c.app.state.locks[id(self.helm2)]
+            lock.acquire()
+            try:
+                self.assertEqual(self.ask(c, 'saina-helm').status_code, 503)
+                self.assertEqual(self.ask(c, 'helm-0.8b').status_code, 200)
+            finally:
+                lock.release()
+
+    def test_duplicate_releases_are_refused(self):
+        other = SharedFakeScorer(); other.model_id = 'saina-helm-2-0.8b'
+        with self.assertRaisesRegex(RuntimeError, 'different release'):
+            with TestClient(create_app(scorers=[self.helm2, other], api_key='k')):
+                pass
+
+    def test_models_spec(self):
+        from saina.server import parse_models
+        self.assertEqual(parse_models('run-saina/saina-helm-2-0.8b@' + 'b' * 40 + ':32768, /models/old@' + 'a' * 40),
+                         [('run-saina/saina-helm-2-0.8b', 'b' * 40, 32768), ('/models/old', 'a' * 40, None)])
+        for bad in ('', 'x@r:big', '@r'):
+            with self.assertRaises(ValueError):
+                parse_models(bad)
+
+
+@unittest.skipUnless(HAVE_FASTAPI, 'fastapi and httpx required')
 class RouteTests(unittest.TestCase):
     def app(self, api_key='k1, k2'):
         return create_app(scorer=FakeScorer(), api_key=api_key)
