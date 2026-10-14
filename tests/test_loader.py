@@ -92,7 +92,8 @@ class LoaderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             write_checkpoint(Path(d), shared=True)
             self.assertEqual(checkpoint_format(Path(d)), 2)
-        for package, message in (({'saina_checkpoint_format': 3}, 'Unsupported Helm checkpoint format'),
+        for package, message in (({'saina_checkpoint_format': 4}, 'Unsupported Helm checkpoint format'),
+                                 ({'saina_checkpoint_format': 3}, 'does not match'),
                                  ({'saina_checkpoint_format': '2'}, 'Unsupported Helm checkpoint format'),
                                  ({'saina_checkpoint_format': 2, 'saina_head_type': 'linear'}, 'Conflicting'),
                                  ({'model_type': 'qwen3_5'}, 'does not match')):

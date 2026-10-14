@@ -3,11 +3,17 @@ import json
 import math
 import re
 from pathlib import Path
-from .prompt import (SHARED_PROMPT, answer_codes, encode, encode_agentic_prompt,  # noqa: F401 (re-exported)
-                     encode_head_prompt, encode_shared_prompt, shared_positions)
+from .prompt import (MULTIMODAL_PROMPT, SHARED_PROMPT, VISION_TOKENS, answer_codes,  # noqa: F401 (re-exported)
+                     encode, encode_agentic_prompt, encode_head_prompt, encode_shared_prompt, insert_images,
+                     shared_positions)
 
-CHECKPOINT_FORMATS = (1, 2)
+CHECKPOINT_FORMATS = (1, 2, 3)
+# Format 1: one prompt per question. 2: one shared pass for every question. 3: a shared pass that also reads
+# images (and audio, as spectrogram images).
+FORMAT_PROMPTS = {2: SHARED_PROMPT, 3: MULTIMODAL_PROMPT}
+INPUTS = ('text', 'image', 'audio')
 LEGACY_MODEL_ID = 'saina-helm-0.8b'  # checkpoints from before releases named themselves
+MODEL_NAME = r'saina-helm(-[0-9]+)?(-[a-z]+)?-[0-9.]+b'
 
 
 class FrozenHeadScorer:
@@ -147,6 +153,94 @@ class SharedHeadScorer(FrozenHeadScorer):
                                    [m for _, _, m in items], temperature)
 
 
+class MultimodalHeadScorer(SharedHeadScorer):
+    """Shared-pass checkpoints with a vision tower: images (and audio clips, read as log-mel spectrogram
+    images) go before the text of the prompt, and every question sees all of them."""
+    prompts = (MULTIMODAL_PROMPT,)
+
+    def __init__(self, path, device='cuda', max_length=None, inputs=('text', 'image')):
+        from . import media
+        super().__init__(path, device=device, max_length=max_length)
+        root = Path(path)
+        config = json.loads((root / 'head-config.json').read_text())
+        self.inputs = tuple(inputs)
+        self.image_processor = load_image_processor(root)
+        p = self.image_processor
+        policy = config.get('image_policy') or {}
+        for name in ('patch_size', 'merge_size', 'temporal_patch_size'):
+            if name in policy and policy[name] != getattr(p, name):
+                raise ValueError('The image processor does not match the checkpoint image policy')
+        # Every image is read at up to IMAGE_MAX_PIXELS (and at least IMAGE_MIN_PIXELS), keeping its aspect ratio.
+        self.image_policy = media.ImagePolicy(p.patch_size, p.merge_size, media.IMAGE_MIN_PIXELS,
+                                              media.IMAGE_MAX_PIXELS)
+        self.vision_ids = [self.tokenizer.convert_tokens_to_ids(t) for t in VISION_TOKENS]
+        model_config = self.model.config
+        if [getattr(model_config, k, None) for k in ('vision_start_token_id', 'image_token_id', 'vision_end_token_id')
+            ] != self.vision_ids:
+            raise ValueError('Checkpoint vision tokens do not match its tokenizer')
+
+    def media_tokens(self, media):
+        """Input tokens of every image the model reads for this media (placeholders, without markers)."""
+        return sum(self.image_policy.tokens(*image.size) for image in (media.images if media else ()))
+
+    def encode_shared(self, context, questions, media=None):
+        ids = super().encode_shared(context, questions)
+        return insert_images(self.tokenizer, ids, [self.image_policy.tokens(*image.size) for image in media.images]
+                             if media else [], self.max_length)
+
+    def forward_shared(self, ids, counts, modes, temperature=1.0, media=None):
+        if not media:
+            return super().forward_shared(ids, counts, modes, temperature)
+        if len(counts) != len(modes) or not counts:
+            raise ValueError('Expected one option count and mode per question')
+        if any(mode not in self.supported_modes for mode in modes):
+            raise ValueError('Checkpoint does not support a requested mode')
+        if not math.isfinite(temperature) or temperature <= 0:
+            raise ValueError('Temperature must be positive and finite')
+        torch, policy = self.torch, self.image_policy
+        grids = [policy.grid(*image.size) for image in media.images]
+        pad = self.vision_ids[1]
+        if list(ids).count(pad) != sum(t * h * w // policy.merge_size ** 2 for t, h, w in grids):
+            raise ValueError('Encoded input does not match its images')
+        positions = shared_positions(self.tokenizer, len(ids), len(counts))
+        self.last_input_tokens = len(ids)
+        pixels = self.image_processor(images=list(media.images), return_tensors='pt', size={
+            'shortest_edge': policy.min_pixels, 'longest_edge': policy.max_pixels})
+        if pixels['image_grid_thw'].tolist() != grids:
+            raise ValueError('Image preprocessing does not match the encoded input')
+        ids = torch.tensor([list(ids)], device=self.device)
+        # No per-request feature cache: a serving process must not retain customer text or media.
+        with torch.inference_mode(), torch.autocast('cuda', dtype=torch.bfloat16, enabled=ids.is_cuda):
+            hidden = self.model.model(
+                input_ids=ids, attention_mask=torch.ones_like(ids),
+                pixel_values=pixels['pixel_values'].to(self.device),
+                image_grid_thw=pixels['image_grid_thw'].to(self.device),
+                mm_token_type_ids=(ids == pad).to(torch.int32),
+                use_cache=False, return_dict=True).last_hidden_state[0]
+            logits = self.head(hidden[positions]).float()
+            out = []
+            for row, count, mode in zip(logits, counts, modes):
+                scaled = row[:count] / temperature
+                out.append((scaled.sigmoid() if mode == 'multi_label' else scaled.softmax(0)).cpu().tolist())
+        return out
+
+    def predict_questions(self, context, questions, temperature=1.0, media=None):
+        items = [(q['question'], q['choices'], q['mode']) for q in questions]
+        return self.forward_shared(self.encode_shared(context, items, media), [len(c) for _, c, _ in items],
+                                   [m for _, _, m in items], temperature, media)
+
+
+def load_image_processor(root):
+    """The image processor a multimodal checkpoint was trained with (PIL backend, as in training)."""
+    from transformers import AutoImageProcessor
+    if not (Path(root) / 'preprocessor_config.json').is_file():
+        raise ValueError('Multimodal checkpoints must ship preprocessor_config.json')
+    try:
+        return AutoImageProcessor.from_pretrained(str(root), backend='pil')
+    except (TypeError, ValueError):
+        return AutoImageProcessor.from_pretrained(str(root), use_fast=False)
+
+
 def checkpoint_format(path):
     """Reject artifacts this runtime does not understand instead of misreading them."""
     config = json.loads((path / 'head-config.json').read_text())
@@ -154,22 +248,35 @@ def checkpoint_format(path):
     version = package.get('saina_checkpoint_format', 1)
     if type(version) is not int or version not in CHECKPOINT_FORMATS:
         raise ValueError(f'Unsupported Helm checkpoint format {version!r}; upgrade the saina package')
-    shared = config.get('prompt') == SHARED_PROMPT
-    for field, expected in (('saina_prompt_format', config.get('prompt')),
+    prompt = config.get('prompt')
+    shared = prompt in FORMAT_PROMPTS.values()
+    for field, expected in (('saina_prompt_format', prompt),
                             ('saina_head_type', config.get('head_type', 'linear')),
                             ('shared_trunk_pass', shared)):
         if field in package and package[field] != expected:
             raise ValueError('Conflicting checkpoint architecture metadata: ' + field)
-    if shared != (version == 2):
+    if FORMAT_PROMPTS.get(version) != (prompt if shared else None):
         raise ValueError('Checkpoint format does not match its prompt format')
     return version
+
+
+def checkpoint_inputs(path):
+    """Inputs a checkpoint was trained to read: always text; images and audio only for format 3."""
+    package = json.loads((path / 'config.json').read_text()) if (path / 'config.json').is_file() else {}
+    inputs = package.get('saina_inputs', ['text'])
+    if (not isinstance(inputs, list) or not inputs or inputs[0] != 'text' or len(set(inputs)) != len(inputs)
+            or set(inputs) - set(INPUTS)):
+        raise ValueError('Invalid saina_inputs in checkpoint config')
+    if len(inputs) > 1 and package.get('saina_checkpoint_format') != 3:
+        raise ValueError('Only format 3 checkpoints read images or audio')
+    return tuple(inputs)
 
 
 def checkpoint_model_id(path):
     # Releases name themselves; checkpoints from before naming are the original Helm 0.8B.
     package = json.loads((path / 'config.json').read_text()) if (path / 'config.json').is_file() else {}
     model_id = package.get('saina_model', LEGACY_MODEL_ID)
-    if not isinstance(model_id, str) or not re.fullmatch(r'saina-helm(-[0-9]+)?-[0-9.]+b', model_id):
+    if not isinstance(model_id, str) or not re.fullmatch(MODEL_NAME, model_id):
         raise ValueError('Invalid saina_model name in checkpoint config')
     return model_id
 
@@ -183,9 +290,14 @@ def load_scorer(checkpoint, revision=None, device='cpu', max_length=None):
         path = Path(snapshot_download(checkpoint, revision=revision,
             allow_patterns=['*.json', '*.safetensors', '*.txt', '*.model', '*.jinja', '*.tiktoken']))
     if (path / 'head-config.json').is_file():
-        model_id = checkpoint_model_id(path)
-        scorer_class = SharedHeadScorer if checkpoint_format(path) == 2 else FrozenHeadScorer
-        scorer = scorer_class(path, device=device, max_length=max_length)
+        model_id, inputs = checkpoint_model_id(path), checkpoint_inputs(path)
+        version = checkpoint_format(path)
+        if version == 3:
+            scorer = MultimodalHeadScorer(path, device=device, max_length=max_length, inputs=inputs)
+        else:
+            scorer = (SharedHeadScorer if version == 2 else FrozenHeadScorer)(path, device=device,
+                                                                              max_length=max_length)
+            scorer.inputs = inputs
         scorer.model_id, scorer.revision = model_id, revision
         return scorer
     raise ValueError('Expected a staged Helm checkpoint with head-config.json')

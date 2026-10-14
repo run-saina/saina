@@ -4,7 +4,11 @@ from itertools import product
 from .errors import InputTooLong
 
 SHARED_PROMPT = 'shared_context_query_slots_v1'
-PROMPT_FORMATS = ('BaseScorer.encode_prompt', 'AgenticScorer.encode_prompt', SHARED_PROMPT)
+# The shared-pass prompt with images (and audio spectrograms) placed before the text of the user turn.
+MULTIMODAL_PROMPT = 'shared_multimodal_native_processor_v2'
+SHARED_PROMPTS = (SHARED_PROMPT, MULTIMODAL_PROMPT)
+PROMPT_FORMATS = ('BaseScorer.encode_prompt', 'AgenticScorer.encode_prompt', SHARED_PROMPT, MULTIMODAL_PROMPT)
+VISION_TOKENS = ('<|vision_start|>', '<|image_pad|>', '<|vision_end|>')
 
 
 def answer_codes(tokenizer):
@@ -87,6 +91,26 @@ def encode_shared_prompt(tokenizer, codes, context, questions, max_length):
     return ids
 
 
+def insert_images(tokenizer, ids, image_tokens, max_length):
+    """Shared-prompt IDs with one vision block per image (`image_tokens` placeholders each, in order)
+    inserted at the start of the user turn, before the text. Question slots stay at the end, so
+    `shared_positions` still finds them. Keep aligned with the training encoder (encode_multimodal)."""
+    if not image_tokens:
+        return ids
+    marker = tokenizer.encode('<|im_start|>user\n', add_special_tokens=False)
+    start = next((i + len(marker) for i in range(len(ids) - len(marker) + 1) if ids[i:i + len(marker)] == marker), None)
+    if start is None:
+        raise ValueError('The chat template has no user turn')
+    begin, pad, end = (tokenizer.convert_tokens_to_ids(t) for t in VISION_TOKENS)
+    visual = []
+    for count in image_tokens:
+        visual += [begin] + [pad] * count + [end]
+    ids = ids[:start] + visual + ids[start:]
+    if len(ids) > max_length:
+        raise InputTooLong('Input exceeds model context window; send fewer or smaller images')
+    return ids
+
+
 def shared_positions(tokenizer, length, count):
     """Readout positions of `count` question slots at the end of a shared prompt of `length` tokens:
     the last token of each slot, so they can be recovered from the encoded IDs alone."""
@@ -100,7 +124,7 @@ def shared_positions(tokenizer, length, count):
 
 def encode(prompt_format, tokenizer, codes, context, question, choices, max_length, mode='single_label'):
     """Token IDs of the exact model input for one question."""
-    if prompt_format == SHARED_PROMPT:
+    if prompt_format in SHARED_PROMPTS:
         return encode_shared_prompt(tokenizer, codes, context, [(question, choices, mode)], max_length)
     if prompt_format == 'AgenticScorer.encode_prompt':
         return encode_agentic_prompt(tokenizer, codes, context, question, choices, max_length, mode)

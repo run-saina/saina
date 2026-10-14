@@ -8,8 +8,22 @@ export type Question =
   | {type: 'multi_choice'; question: Content; options: Options};
 export type DecisionQuestion = Question extends infer Q ? Q extends Question ? Q & {threshold?: number} &
   (Q['type'] extends 'yes_no' | 'single_choice' ? {min_margin?: number} : {}) : never : never;
+/**
+ * An image: a `data:image/(png|jpeg|webp);base64,...` URL, an http(s) URL (downloaded by the client), a Blob or
+ * File, an ArrayBuffer or a typed array such as a Node Buffer. Sent as a data URL.
+ */
+export type ImageInput = string | Blob | ArrayBuffer | ArrayBufferView;
+/** An audio clip (WAV, FLAC, MP3, Ogg or WebM, at most 10 s): the same kinds of value as {@link ImageInput}. */
+export type AudioInput = string | Blob | ArrayBuffer | ArrayBufferView;
+/**
+ * Images and audio clips for a model that reads them (see `inputs` in /v1/models); a text-only model refuses them
+ * with `invalid_request`. At most 8 images and 4 clips, each at most 10,000,000 bytes. Images go before the text,
+ * read at up to 1.6 megapixels; each clip is read as a log-mel spectrogram after the images. Every question sees
+ * all of them, and their input tokens count in `usage.input_tokens`.
+ */
+export interface MediaFields {images?: ImageInput[]; audios?: AudioInput[]}
 /** `saina-helm`: whichever Helm the endpoint serves. `helm-0.8b` is the deprecated 0.1 name of `saina-helm-0.8b`. */
-export type AskRequest = {model: 'saina-helm' | 'saina-helm-2-0.8b' | 'saina-helm-0.8b' | 'helm-0.8b'; state: Content} & (
+export type AskRequest = {model: 'saina-helm' | 'saina-helm-2-0.8b' | 'saina-helm-0.8b' | 'helm-0.8b' | (string & {}); state: Content} & MediaFields & (
   | {mode?: 'distribution'; questions: Record<string, Question>}
   | {mode: 'decision'; threshold?: number; min_margin?: number; questions: Record<string, DecisionQuestion>});
 export type Reason = 'accepted' | 'below_threshold' | 'below_margin' | 'tie';
@@ -20,7 +34,7 @@ export type Answer =
   | {type: 'multi_choice'; memberships: Record<string, number>; selections?: string[]; reason?: Reason};
 export interface AskResponse {model: string; answers: Record<string, Answer>; usage: {input_tokens: number; output_tokens: number}}
 export type SystemOneQuestion = {type: 'choice' | 'score' | 'noul'; instructions: Content; criteria?: {[key: string]: Json} | Json[] | null};
-export type SystemOneRequest = {model: string; state: Content; questions: Record<string, SystemOneQuestion>};
+export type SystemOneRequest = {model: string; state: Content; questions: Record<string, SystemOneQuestion>} & MediaFields;
 export type SystemOneAnswer =
   | {type: 'noul'; noul: number}
   | {type: 'choice'; choice: string; probabilities: Record<string, number>; confidence: number}
@@ -33,6 +47,11 @@ export const CREDIT_FIELDS: readonly string[];
 export function newIdempotencyKey(): string;
 /** JSON.parse that converts known credit fields (decimal strings) to BigInt. */
 export function parseCredits(text: string): any;
+export const MEDIA_LIMITS: Readonly<{images: 8; audios: 4; bytes: 10000000; audioSeconds: 10}>;
+/** One image as a base64 data URL (type from its content). */
+export function imageDataUrl(value: ImageInput, options?: {fetch?: typeof fetch}): Promise<string>;
+/** One audio clip as a base64 data URL (type from its content). */
+export function audioDataUrl(value: AudioInput, options?: {fetch?: typeof fetch}): Promise<string>;
 
 export type ErrorCode =
   | 'invalid_api_key' | 'key_revoked' | 'account_suspended' | 'insufficient_credits' | 'invalid_request'

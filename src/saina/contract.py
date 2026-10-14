@@ -74,9 +74,16 @@ class Rating(BaseQuestion):
 TypedQuestion = Annotated[YesNo | SingleChoice | Rating | MultiChoice, Field(discriminator='type')]
 
 
+# Images and audio clips are base64 data URLs; limits and types are checked per model (see saina.media).
+MediaList = list[str] | None
+
+
 class AskRequest(StrictModel):
     model: Annotated[str, Field(min_length=1, max_length=64)]
     state: Content
+    images: MediaList = None
+    audios: MediaList = None
+    videos: list[JsonValue] | None = None
     mode: Literal['distribution', 'decision'] = 'distribution'
     threshold: Probability = .8
     min_margin: Probability = 0.
@@ -208,8 +215,11 @@ def respond(request, prepared, execution, model_id=LEGACY_MODEL_ID):
 
 
 def ask(request: AskRequest, scorer, expected_input_tokens=None):
+    from .media import decode_media, request_media
     model_id = served_model(scorer, request.model)
+    raw = request_media(request, scorer)
     # Encode and check capability for every question before any forward pass in a mixed request.
     prepared = prepare_ask(request)
     return respond(request, prepared, execute(prepared, scorer, billable_ask(request),
-                                              expected_input_tokens=expected_input_tokens), model_id)
+                                              expected_input_tokens=expected_input_tokens,
+                                              media=decode_media(raw) if raw else None), model_id)

@@ -37,6 +37,9 @@ class SystemOneRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     model: str = Field(min_length=1)
     state: str | dict[str, JsonValue] | list[JsonValue]
+    images: list[str] | None = None
+    audios: list[str] | None = None
+    videos: list[JsonValue] | None = None
     questions: Annotated[dict[str, Question], Field(min_length=1, max_length=256)]
 
 
@@ -65,7 +68,10 @@ def respond(request, prepared, execution, model_id=LEGACY_MODEL_ID):
 
 
 def evaluate(request, scorer, expected_input_tokens=None):
+    from .media import decode_media, request_media
+    raw = request_media(request, scorer)
     prepared = prepare_systemone(request)
     return respond(request, prepared, execute(prepared, scorer, billable_systemone(request),
-                                              expected_input_tokens=expected_input_tokens),
+                                              expected_input_tokens=expected_input_tokens,
+                                              media=decode_media(raw) if raw else None),
                    getattr(scorer, 'model_id', LEGACY_MODEL_ID))

@@ -202,29 +202,37 @@ class SainaHelm:
 
     # Inference -----------------------------------------------------------------------------------------
 
-    def ask(self, *, model, state, questions, mode='distribution', idempotency_key=None, **policy):
-        """Ask typed questions; policy defaults/overrides require decision mode."""
-        return self.ask_with_metadata(model=model, state=state, questions=questions, mode=mode,
-                                      idempotency_key=idempotency_key, **policy)[0]
+    def ask(self, *, model, state, questions, mode='distribution', images=None, audios=None, idempotency_key=None,
+            **policy):
+        """Ask typed questions; policy defaults/overrides require decision mode.
 
-    def ask_with_metadata(self, *, model, state, questions, mode='distribution', idempotency_key=None, **policy):
+        ``images`` (PNG, JPEG or WebP) and ``audios`` (WAV, FLAC, MP3, Ogg or WebM, at most 10 s each) are
+        lists of data URLs, local paths, http(s) URLs (downloaded here), bytes, PIL images (images) or
+        ``(samples, sample_rate)`` NumPy arrays (audio); every question sees all of them. They need a model
+        that reads images or audio."""
+        return self.ask_with_metadata(model=model, state=state, questions=questions, mode=mode, images=images,
+                                      audios=audios, idempotency_key=idempotency_key, **policy)[0]
+
+    def ask_with_metadata(self, *, model, state, questions, mode='distribution', images=None, audios=None,
+                          idempotency_key=None, **policy):
         """Like :meth:`ask`, returning ``(result, ResponseMetadata)``."""
         if not isinstance(questions, dict) or not questions:
             raise ValueError('At least one typed question is required')
-        payload = dict(model=model, state=state, questions=questions, mode=mode, **policy)
+        payload = dict(model=model, state=state, **_media(images, audios), questions=questions, mode=mode, **policy)
         result, meta = self._post('/v1/ask', payload, idempotency_key)
         _validate_answers(payload, result)
         return result, meta
 
-    def system_one(self, *, model, state, questions, idempotency_key=None):
-        """Call ``POST /v1/systemone`` (System One wire format: ``noul``, ``choice``, ``score``)."""
-        return self.system_one_with_metadata(model=model, state=state, questions=questions,
-                                             idempotency_key=idempotency_key)[0]
+    def system_one(self, *, model, state, questions, images=None, audios=None, idempotency_key=None):
+        """Call ``POST /v1/systemone`` (System One wire format: ``noul``, ``choice``, ``score``); ``images`` and
+        ``audios`` as in :meth:`ask`."""
+        return self.system_one_with_metadata(model=model, state=state, questions=questions, images=images,
+                                             audios=audios, idempotency_key=idempotency_key)[0]
 
-    def system_one_with_metadata(self, *, model, state, questions, idempotency_key=None):
+    def system_one_with_metadata(self, *, model, state, questions, images=None, audios=None, idempotency_key=None):
         if not isinstance(questions, dict) or not questions:
             raise ValueError('At least one question is required')
-        payload = dict(model=model, state=state, questions=questions)
+        payload = dict(model=model, state=state, **_media(images, audios), questions=questions)
         result, meta = self._post('/v1/systemone', payload, idempotency_key)
         if (not isinstance(result, dict) or not isinstance(result.get('model'), str) or
                 not isinstance(result.get('answers'), dict) or set(result['answers']) != set(questions)):
@@ -320,6 +328,19 @@ class SainaHelm:
             return json.loads(raw), response_headers
         except (ValueError, UnicodeError):
             raise _Uncertain(SainaHelmError('Invalid JSON response')) from None
+
+
+def _media(images, audios):
+    """Request fields for images and audio clips, each converted to a base64 data URL."""
+    from .media import audio_data_url, image_data_url
+    fields = {}
+    for name, items, convert in (('images', images, image_data_url), ('audios', audios, audio_data_url)):
+        if items is None:
+            continue
+        if isinstance(items, (str, bytes, bytearray)) or not hasattr(items, '__iter__'):
+            raise ValueError(f'{name} must be a list')
+        fields[name] = [convert(v) for v in items]
+    return fields
 
 
 def _validate_answers(request, result):
