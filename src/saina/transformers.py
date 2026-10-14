@@ -37,9 +37,21 @@ class HelmModel(PreTrainedModel):
         return {'probabilities': self.scorer.predict(
             request['input'], request['task'], request['choices'], mode=request['mode'])}
 
+    @property
+    def inputs(self):
+        """What this checkpoint reads: ``('text',)``, or text plus ``'image'`` and ``'audio'``."""
+        return tuple(getattr(self.scorer, 'inputs', ('text',)))
+
     def ask(self, **request):
-        """Answer a native typed-question request; shared-pass checkpoints use one backbone call."""
+        """Answer a native typed-question request; shared-pass checkpoints use one backbone call.
+
+        ``images`` and ``audios`` take the same values as the HTTP client: data URLs, local paths, http(s)
+        URLs, bytes, PIL images (images) or ``(samples, sample_rate)`` arrays (audio)."""
         from .contract import AskRequest, ask
+        from .media import audio_data_url, image_data_url
+        for name, convert in (('images', image_data_url), ('audios', audio_data_url)):
+            if isinstance(request.get(name), (list, tuple)):
+                request[name] = [convert(v) for v in request[name]]
         self.scorer.device = str(self.device)
         return ask(AskRequest.model_validate(request), self.scorer)
 

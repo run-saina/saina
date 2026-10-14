@@ -25,6 +25,8 @@ from .loader import load_scorer
 from .contract import (LEGACY_MODEL_ID, AskRequest, AskResponse, billable_ask, model_names, prepare_ask,
                        respond as respond_ask)
 from .jev import SystemOneRequest, billable_systemone, prepare_systemone, respond as respond_systemone
+from .media import (IMAGE_MAX_PIXELS, MAX_AUDIO_SECONDS, MAX_AUDIOS, MAX_IMAGES, MAX_MEDIA_BYTES, MediaError,
+                    decode_media, request_media)
 from .prepare import MeteringMismatch, check_capabilities, encode_all, execute
 
 
@@ -153,6 +155,11 @@ CATALOG = {
 
 def model_id(scorer):
     return getattr(scorer, 'model_id', LEGACY_MODEL_ID)
+
+
+def model_inputs(scorer):
+    """What a served model reads: text, plus images and audio for multimodal checkpoints."""
+    return list(getattr(scorer, 'inputs', ('text',)))
 
 
 def parse_models(spec):
@@ -308,7 +315,12 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
             raise
         return future.result()
 
-    async def serve(request, kind, prepared, billable, respond, model):
+    def encode_request(prepared, model, raw):
+        # Images are decoded and audio rendered to spectrograms here, outside the execution slot.
+        media = decode_media(raw) if raw else None
+        return media, encode_all(prepared, model, media)
+
+    async def serve(request, kind, prepared, billable, respond, model, body):
         # Metering headers are honored only from the gateway's service token.
         trusted = kind == 'service'
         request_id = request.headers.get('x-saina-request-id') if trusted else None
@@ -316,16 +328,19 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
         deadline_ms = int_header(request, 'x-saina-deadline-ms') if trusted else None
         try:
             check_capabilities(prepared, getattr(model, 'supported_modes', ('single_label',)))
+            # Media the model cannot read, too many or too large items are refused before queueing.
+            raw = await asyncio.to_thread(request_media, body, model) if (
+                body.images or body.audios or body.videos is not None) else None
             # Take a queue place before tokenizing, so a full queue rejects without encoding anything.
             # Encoding happens outside the execution slot; the place is given back if it fails.
             executor.reserve()
             submitted = False
             try:
-                encoded = await asyncio.to_thread(encode_all, prepared, model)
+                media, encoded = await asyncio.to_thread(encode_request, prepared, model, raw)
                 if expected is not None and sum(map(len, encoded)) != expected:
                     raise MeteringMismatch()
-                future, timing = executor.submit(lambda: execute(prepared, model, billable, encoded), reserved=True,
-                    request_id=request_id, deadline=deadline_ms / 1000 if deadline_ms else None)
+                future, timing = executor.submit(lambda: execute(prepared, model, billable, encoded, media=media),
+                    reserved=True, request_id=request_id, deadline=deadline_ms / 1000 if deadline_ms else None)
                 submitted = True
             finally:
                 if not submitted:
@@ -339,6 +354,9 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
                            NOT_ADMITTED) from None
         except ModelNotServed as e:
             raise ApiError(404, 'not_found', str(e)) from None
+        except MediaError as e:
+            # Media messages name the input by position and never repeat its content.
+            raise ApiError(422, 'invalid_request', str(e)) from None
         except MeteringMismatch:
             raise ApiError(409, 'metering_mismatch', 'Encoded input does not match the expected token count') from None
         except InputTooLong:
@@ -353,6 +371,9 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
         # X-Saina-Billable-Tokens (and usage.input_tokens) is what the request is billed for.
         headers = {'X-Saina-Input-Tokens': str(execution.total_input_tokens),
                    'X-Saina-Billable-Tokens': str(execution.billable_tokens)}
+        if execution.media_tokens:
+            # The part of the billable tokens that is images and audio spectrograms.
+            headers['X-Saina-Media-Tokens'] = str(execution.media_tokens)
         if trusted:
             headers.update({'X-Saina-Queue-Ms': str(timing.get('queue_ms', 0)),
                             'X-Saina-Exec-Ms': str(timing.get('exec_ms', 0))})
@@ -369,10 +390,10 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
         default = models[0]
         health = {'status': 'ready', 'model': model_id(default), 'version': __version__,
                   'revision': getattr(default, 'revision', None) or env('SAINA_REVISION') or None,
-                  'queue': executor.stats()}
+                  'inputs': model_inputs(default), 'queue': executor.stats()}
         if len(models) > 1:
-            health['models'] = [{'model': model_id(s), 'revision': getattr(s, 'revision', None)}
-                                for s in models]
+            health['models'] = [{'model': model_id(s), 'revision': getattr(s, 'revision', None),
+                                 'inputs': model_inputs(s)} for s in models]
         return health
 
     @app.get('/v1/models')
@@ -388,6 +409,15 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
                 'max_context_length': {'value': limit, 'unit': 'token'}}}
             if price:
                 text['pricing'] = [{'type': 'prompt', 'unit': 'token', 'cost_usd': price}]
+            modalities = [text]
+            if 'image' in model_inputs(scorer):
+                modalities.append({'type': 'image', 'supported_inputs': {
+                    'max_items': MAX_IMAGES, 'max_bytes': MAX_MEDIA_BYTES, 'max_pixels': IMAGE_MAX_PIXELS,
+                    'formats': ['image/png', 'image/jpeg', 'image/webp']}})
+            if 'audio' in model_inputs(scorer):
+                modalities.append({'type': 'audio', 'supported_inputs': {
+                    'max_items': MAX_AUDIOS, 'max_bytes': MAX_MEDIA_BYTES, 'max_seconds': MAX_AUDIO_SECONDS,
+                    'formats': ['audio/wav', 'audio/flac', 'audio/mpeg', 'audio/ogg', 'audio/webm']}})
             known = CATALOG.get(model_id(scorer), {'name': 'Saina: ' + model_id(scorer), 'created': 0,
                                                    'hugging_face_id': 'run-saina/' + model_id(scorer)})
             return {
@@ -398,7 +428,8 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
                 'description': ('Saina Helm is an open 0.8B decision model for workflow automation. It reads a state and '
                                 'answers typed questions (noul, choice, score) with a probability for every option, '
                                 'instead of generating text.'),
-                'input_modalities': [text],
+                'input_modalities': modalities,
+                'inputs': model_inputs(scorer),
                 'output_modalities': [{'type': 'decisions', 'supported_parameters': {}}],
                 'capacity': [{'type': 'request', 'unit': 'request', 'per': 'minute', 'value': 300}],
                 'is_ready': True,
@@ -410,7 +441,7 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
     async def native_questions(body: AskRequest, request: Request, kind: str = Depends(caller)):
         result, headers = await serve(request, kind, prepare_ask(body), billable_ask(body),
                                       lambda prepared, execution, mid: respond_ask(body, prepared, execution, mid),
-                                      pick(body.model))
+                                      pick(body.model), body)
         return JSONResponse(AskResponse.model_validate(result).model_dump(exclude_unset=True), headers=headers)
 
     @app.post('/v1/systemone')
@@ -419,7 +450,7 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
         # System One callers send their own model labels; unknown labels reach the default model.
         result, headers = await serve(request, kind, prepare_systemone(body), billable_systemone(body),
                                       lambda prepared, execution, mid: respond_systemone(body, prepared, execution, mid),
-                                      pick(body.model, fallback=True))
+                                      pick(body.model, fallback=True), body)
         return JSONResponse(result, headers=headers)
 
     @app.delete('/v1/internal/requests/{request_id}', dependencies=[Depends(service_only)])

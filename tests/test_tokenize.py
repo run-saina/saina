@@ -75,3 +75,36 @@ class TokenCounterTests(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+MULTIMODAL = os.environ.get('SAINA_TEST_MULTIMODAL_CHECKPOINT')
+
+
+@unittest.skipUnless(MULTIMODAL and Path(MULTIMODAL).is_dir(), 'set SAINA_TEST_MULTIMODAL_CHECKPOINT to a package')
+class MultimodalCounterTests(unittest.TestCase):
+    def test_media_tokens_are_counted_without_the_model(self):
+        import base64
+        import io
+        import subprocess
+        import sys
+        # Counting images needs only their size and the processor's geometry; equality with the runtime's
+        # usage is checked on a GPU in test_multimodal_gpu.py.
+        code = f'''
+import base64, io, sys
+from PIL import Image
+from saina.contract import AskRequest
+from saina.tokenize import TokenCounter
+counter = TokenCounter.from_checkpoint({MULTIMODAL!r})
+buffer = io.BytesIO(); Image.new('RGB', (3000, 2000)).save(buffer, 'PNG')
+url = 'data:image/png;base64,' + base64.b64encode(buffer.getvalue()).decode()
+base = {{'model': counter.model_id, 'state': 's', 'questions': {{'q': {{'type': 'yes_no', 'question': 'Q?'}}}}}}
+text = counter.bill_ask(AskRequest.model_validate(base))
+image = counter.bill_ask(AskRequest.model_validate({{**base, 'images': [url, url]}}))
+assert image.media_tokens == 2 * 64 * 96 // 4, image  # read at 1.6 MP: a 64 x 96 patch grid each
+assert image.total == text.total + image.media_tokens
+lengths = counter.count_ask(AskRequest.model_validate({{**base, 'images': [url]}}))
+assert lengths[0] == counter.count_ask(AskRequest.model_validate(base))[0] + 64 * 96 // 4 + 2
+print('ok')
+'''
+        out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+        self.assertEqual(out.stdout.strip(), 'ok', out.stderr[-2000:])

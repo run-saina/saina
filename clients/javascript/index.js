@@ -106,6 +106,73 @@ function httpError(status, text, headers) {
   }), true];
 }
 
+// -- images and audio ------------------------------------------------------------------------------
+/** Per request: at most 8 images and 4 audio clips, each at most 10,000,000 bytes (the server checks too). */
+export const MEDIA_LIMITS = Object.freeze({images: 8, audios: 4, bytes: 10_000_000, audioSeconds: 10});
+const IMAGE_TYPES = ['png', 'jpeg', 'webp'];
+const AUDIO_TYPES = ['wav', 'x-wav', 'flac', 'mpeg', 'ogg', 'webm'];
+
+function sniffImage(b) {
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'png';
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'jpeg';
+  if (ascii(b, 0, 4) === 'RIFF' && ascii(b, 8, 12) === 'WEBP') return 'webp';
+  return null;
+}
+function sniffAudio(b) {
+  if (ascii(b, 0, 4) === 'RIFF' && ascii(b, 8, 12) === 'WAVE') return 'wav';
+  if (ascii(b, 0, 4) === 'fLaC') return 'flac';
+  if (ascii(b, 0, 4) === 'OggS') return 'ogg';
+  if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return 'webm';
+  if (ascii(b, 0, 3) === 'ID3' || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0)) return 'mpeg';
+  return null;
+}
+const ascii = (b, start, end) => String.fromCharCode(...b.subarray(start, end));
+
+function base64(bytes) {
+  if (typeof Buffer !== 'undefined') return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64');
+  let text = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(text);
+}
+
+async function mediaBytes(value, what, fetchImpl) {
+  if (typeof value === 'string' && /^https?:\/\//i.test(value)) {
+    const response = await fetchImpl(value);
+    if (!response.ok) throw new TypeError(`Cannot download the ${what} at ${value} (HTTP ${response.status})`);
+    return {bytes: new Uint8Array(await response.arrayBuffer()), type: response.headers?.get?.('Content-Type') ?? ''};
+  }
+  if (typeof Blob !== 'undefined' && value instanceof Blob) return {bytes: new Uint8Array(await value.arrayBuffer()), type: value.type};
+  if (value instanceof ArrayBuffer) return {bytes: new Uint8Array(value), type: ''};
+  if (ArrayBuffer.isView(value)) return {bytes: new Uint8Array(value.buffer, value.byteOffset, value.byteLength), type: ''};
+  throw new TypeError(`An ${what} is a data URL, an http(s) URL, a Blob or File, an ArrayBuffer or a typed array (Buffer)`);
+}
+
+async function toDataUrl(value, kind, fetchImpl = globalThis.fetch) {
+  if (typeof value === 'string' && value.slice(0, 5).toLowerCase() === 'data:') return value;
+  const what = kind === 'image' ? 'image' : 'audio clip';
+  const {bytes} = await mediaBytes(value, what, fetchImpl);
+  if (bytes.length > MEDIA_LIMITS.bytes) throw new TypeError(`The ${what} is larger than ${MEDIA_LIMITS.bytes} bytes`);
+  const subtype = kind === 'image' ? sniffImage(bytes) : sniffAudio(bytes);
+  if (!subtype) throw new TypeError(kind === 'image' ? 'Send PNG, JPEG or WebP images' : 'Send WAV, FLAC, MP3, Ogg or WebM audio');
+  return `data:${kind}/${subtype};base64,${base64(bytes)}`;
+}
+
+/** One image as a data:image/(png|jpeg|webp);base64 URL, from a data URL, an http(s) URL, a Blob/File or bytes. */
+export function imageDataUrl(value, {fetch: fetchImpl} = {}) { return toDataUrl(value, 'image', fetchImpl); }
+/** One audio clip (WAV, FLAC, MP3, Ogg or WebM) as a data:audio/...;base64 URL, from the same kinds of value. */
+export function audioDataUrl(value, {fetch: fetchImpl} = {}) { return toDataUrl(value, 'audio', fetchImpl); }
+
+/** The request with images and audios converted to data URLs (other fields untouched). */
+async function withMedia(request, fetchImpl) {
+  const out = {...request};
+  for (const [name, kind] of [['images', 'image'], ['audios', 'audio']]) {
+    if (request[name] == null) continue;
+    if (!Array.isArray(request[name])) throw new TypeError(`${name} must be an array`);
+    out[name] = await Promise.all(request[name].map(v => toDataUrl(v, kind, fetchImpl)));
+  }
+  return out;
+}
+
 class Uncertain { constructor(error, retryAfter = null) { this.error = error; this.retryAfter = retryAfter; } }
 
 export class SainaHelm {
@@ -135,6 +202,7 @@ export class SainaHelm {
   async askWithMetadata(request, {idempotencyKey} = {}) {
     if (!request || !request.questions || !Object.keys(request.questions).length)
       throw new TypeError('At least one typed question is required');
+    request = await withMedia(request, this.fetch);
     const {result, metadata} = await this.#post('/v1/ask', request, idempotencyKey);
     validateAnswers(request, result);
     return {result, metadata};
@@ -145,6 +213,7 @@ export class SainaHelm {
   async systemOneWithMetadata(request, {idempotencyKey} = {}) {
     if (!request || !request.questions || !Object.keys(request.questions).length)
       throw new TypeError('At least one question is required');
+    request = await withMedia(request, this.fetch);
     const {result, metadata} = await this.#post('/v1/systemone', request, idempotencyKey);
     const keys = Object.keys(request.questions);
     if (!result || typeof result.model !== 'string' || !result.answers || typeof result.answers !== 'object' ||

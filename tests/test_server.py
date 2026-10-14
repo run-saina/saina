@@ -194,8 +194,9 @@ class TwoModelTests(unittest.TestCase):
         with TestClient(self.app) as c:
             h = c.get('/healthz').json()
             self.assertEqual((h['model'], h['revision']), ('saina-helm-2-0.8b', 'b' * 40))
-            self.assertEqual(h['models'], [{'model': 'saina-helm-2-0.8b', 'revision': 'b' * 40},
-                                           {'model': 'saina-helm-0.8b', 'revision': 'a' * 40}])
+            self.assertEqual(h['inputs'], ['text'])
+            self.assertEqual(h['models'], [{'model': 'saina-helm-2-0.8b', 'revision': 'b' * 40, 'inputs': ['text']},
+                                           {'model': 'saina-helm-0.8b', 'revision': 'a' * 40, 'inputs': ['text']}])
             data = c.get('/v1/models').json()['data']
             self.assertEqual([m['id'] for m in data], ['saina-helm-2-0.8b', 'saina-helm-0.8b'])
             self.assertEqual([m['input_modalities'][0]['supported_inputs']['max_context_length']['value'] for m in data],
@@ -480,3 +481,109 @@ class BoundedExecutorTests(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+class MediaFakeScorer(SharedFakeScorer):
+    """A shared-pass model that reads images and audio; every image is 10 tokens."""
+    inputs = ('text', 'image', 'audio')
+    model_id = 'saina-helm-2-mm-0.8b'
+
+    def media_tokens(self, media):
+        return 10 * len(media.images) if media else 0
+
+    def encode_shared(self, context, questions, media=None):
+        self.media = media
+        return super().encode_shared(context, questions) + [0] * self.media_tokens(media)
+
+    def forward_shared(self, ids, counts, modes, media=None):
+        self.forwarded_media = media
+        return super().forward_shared(ids, counts, modes)
+
+
+def _png():
+    import io
+    from PIL import Image
+    buffer = io.BytesIO()
+    Image.new('RGB', (40, 30), (10, 200, 10)).save(buffer, 'PNG')
+    return 'data:image/png;base64,' + __import__('base64').b64encode(buffer.getvalue()).decode()
+
+
+def _wav(seconds=1.0):
+    import numpy as np
+    from saina.media import _wav
+    x = 0.1 * np.sin(np.arange(int(16000 * seconds)) / 5)
+    return 'data:audio/wav;base64,' + __import__('base64').b64encode(_wav(x, 16000)).decode()
+
+
+try:
+    import numpy, PIL, scipy, soundfile  # noqa: E401,F401
+    HAVE_MEDIA = True
+except ImportError:
+    HAVE_MEDIA = False
+
+
+@unittest.skipUnless(HAVE_FASTAPI, 'fastapi and httpx required')
+class MediaRouteTests(unittest.TestCase):
+    QUESTIONS = {'ok': {'type': 'yes_no', 'question': 'OK?'}}
+
+    def post(self, scorer, route='/v1/ask', **fields):
+        body = ({'model': 'saina-helm', 'state': 's', 'questions': self.QUESTIONS} if route == '/v1/ask' else
+                {'model': 'saina-helm', 'state': 's', 'questions': {'u': {'type': 'noul', 'instructions': 'Urgent?'}}})
+        with TestClient(create_app(scorer=scorer, api_key='k')) as c:
+            return c.post(route, headers={'Authorization': 'Bearer k'}, json={**body, **fields})
+
+    def test_text_only_model_refuses_media_before_running(self):
+        helm2 = SharedFakeScorer(); helm2.model_id = 'saina-helm-2-0.8b'
+        for route in ('/v1/ask', '/v1/systemone'):
+            for fields in ({'images': ['data:image/png;base64,iVBORw0KGgo=']},
+                           {'audios': ['data:audio/wav;base64,UklGRg==']}):
+                r = self.post(helm2, route, **fields)
+                self.assertEqual(r.status_code, 422, r.text)
+                self.assertEqual(r.json()['error'], {'code': 'invalid_request',
+                                                     'message': 'saina-helm-2-0.8b accepts text only'})
+        self.assertEqual(helm2.calls, [])
+        self.assertEqual(self.post(helm2, images=[], audios=None).status_code, 200)  # empty lists are no media
+
+    def test_videos_and_invalid_media_are_invalid_requests(self):
+        scorer = MediaFakeScorer()
+        for fields, message in (({'videos': ['data:video/mp4;base64,AAAA']}, 'videos are not supported yet'),
+                                ({'images': ['data:image/png;base64,iVBORw0KGgo='] * 9}, 'At most 8 images per request'),
+                                ({'audios': ['data:audio/wav;base64,UklGRg=='] * 5}, 'At most 4 audios per request'),
+                                ({'images': ['https://example.com/cat.png']}, r'images\[0\] must be a base64 data URL'),
+                                ({'images': ['data:image/bmp;base64,Qk0=']}, 'accepted types are image/png')):
+            r = self.post(scorer, **fields)
+            self.assertEqual((r.status_code, r.json()['error']['code']), (422, 'invalid_request'), fields)
+            self.assertRegex(r.json()['error']['message'], message)
+        self.assertEqual(scorer.calls, [])
+        r = self.post(scorer, images=[1])  # not a string: schema validation
+        self.assertEqual((r.status_code, r.json()['error']['code']), (422, 'invalid_request'))
+
+    @unittest.skipUnless(HAVE_MEDIA, 'requires saina[media]')
+    def test_media_is_read_in_order_and_billed(self):
+        scorer = MediaFakeScorer()
+        r = self.post(scorer, images=[_png(), _png()], audios=[_wav()])
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(scorer.forwarded_media.sources, ['image', 'image', 'audio'])
+        self.assertEqual([im.size for im in scorer.forwarded_media.images], [(40, 30), (40, 30), (100, 128)])
+        # Billed: the text sent (s, OK?) plus the input tokens of the two images and the spectrogram.
+        self.assertEqual(r.json()['usage']['input_tokens'], 2 + 30)
+        self.assertEqual(r.headers['x-saina-media-tokens'], '30')
+        self.assertEqual(r.headers['x-saina-input-tokens'], str(40 + 30))
+        r = self.post(scorer, '/v1/systemone', images=[_png()])
+        self.assertEqual((r.status_code, r.json()['usage']['input_tokens']), (200, 2 + 10))
+        r = self.post(scorer, audios=[_wav(11)])
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(r.json()['error']['message'],
+                         'audios[0] is 11.0 s long; at most 10.0 s are accepted (shorten it; nothing is cut off)')
+
+    def test_models_declare_their_inputs(self):
+        with TestClient(create_app(scorers=[MediaFakeScorer(), FakeScorer()], api_key='k')) as c:
+            h = c.get('/healthz').json()
+            self.assertEqual(h['inputs'], ['text', 'image', 'audio'])
+            self.assertEqual([m['inputs'] for m in h['models']], [['text', 'image', 'audio'], ['text']])
+            mm, text = c.get('/v1/models').json()['data']
+            self.assertEqual((mm['inputs'], text['inputs']), (['text', 'image', 'audio'], ['text']))
+            self.assertEqual([m['type'] for m in mm['input_modalities']], ['text', 'image', 'audio'])
+            self.assertEqual(mm['input_modalities'][1]['supported_inputs']['max_items'], 8)
+            self.assertEqual(mm['input_modalities'][2]['supported_inputs']['max_seconds'], 10.0)
+            self.assertEqual([m['type'] for m in text['input_modalities']], ['text'])

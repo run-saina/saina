@@ -17,6 +17,7 @@ or call [Replicate](https://replicate.com/run-saina/saina-helm-2-0.8b) or your o
 ```sh
 pip install saina                  # dependency-free HTTP client
 pip install 'saina[local,server]'  # local inference and authenticated server
+pip install 'saina[media]'         # decoding images and audio (server, local inference, token counting)
 ```
 
 From a checkout, use `pip install .` or `pip install '.[local,server]'`.
@@ -77,6 +78,72 @@ client.usage(from_='2026-10-01'); client.requests(limit=50)
 `saina-helm-0.8b`) only reach that exact model; an endpoint serving a different release answers `404`.
 Responses always give the release name of the model that answered.
 
+## Images and audio
+
+Models that read images or audio say so in `inputs` (`/healthz`, `/v1/models`, `HelmModel.inputs`):
+`["text", "image", "audio"]`. A text-only model, such as `saina-helm-2-0.8b`, refuses a request with images or
+audio with `invalid_request` (`saina-helm-2-0.8b accepts text only`); videos are not supported yet.
+
+```python
+from saina import Saina
+
+client = Saina('https://your-endpoint.example', api_key='YOUR_KEY')
+
+# Text and an image (or several)
+result = client.ask(
+    model='saina-helm',
+    state='The customer says the blender arrived cracked and attached the receipt.',
+    images=['receipt.png'],  # local paths, http(s) URLs, bytes, PIL images or base64 data URLs
+    questions={
+        'route': {'type': 'single_choice', 'question': 'Which team should handle this request?',
+                  'options': {'returns': 'Refunds, replacements and damaged deliveries',
+                              'billing': 'Payments, invoices and charges',
+                              'technical': 'Product setup and faults'}},
+        'on_receipt': {'type': 'yes_no', 'question': 'Does the receipt list the blender?'},
+    },
+)
+
+# Text and an audio clip (or several)
+result = client.ask(
+    model='saina-helm',
+    state='A voicemail left on the support line.',
+    audios=['voicemail.wav'],  # local paths, http(s) URLs, bytes, (samples, sample_rate) arrays or data URLs
+    questions={'upset': {'type': 'yes_no', 'question': 'Does the caller sound upset?'}},
+)
+```
+
+`HelmModel.ask` takes the same `images=` and `audios=` values. Over HTTP, send base64 data URLs:
+
+```bash
+curl -s https://your-endpoint.example/v1/ask -H "Authorization: Bearer $SAINA_API_KEY" \
+  -H 'content-type: application/json' --data-binary @- <<EOF
+{
+  "model": "saina-helm",
+  "state": "What does the attached image show?",
+  "images": ["data:image/png;base64,$(base64 -w0 chart.png)"],
+  "questions": {
+    "kind": {"type": "single_choice", "question": "What kind of image is this?",
+             "options": {"chart": "A chart or plot", "photo": "A photograph", "document": "A document"}}
+  }
+}
+EOF
+```
+
+- **Images:** `data:image/png`, `image/jpeg` or `image/webp`; at most 8 per request, each at most 10,000,000
+  bytes. Each is read at up to 1.6 megapixels (and at least 65,536 pixels), keeping its aspect ratio, and goes
+  before the text of the request.
+- **Audio:** `data:audio/wav`, `audio/x-wav`, `audio/flac`, `audio/mpeg`, `audio/ogg` or `audio/webm`; at most 4
+  per request, each at most 10,000,000 bytes and 10.0 seconds. Longer clips are refused, never cut. Each clip is
+  read as mono 16 kHz audio and turned into a log-mel spectrogram image that follows the images.
+  `saina.media.mel_spectrogram_png(waveform, sample_rate)` renders exactly what the model reads: 128 mel bands
+  from 0 to 8 kHz (Slaney scale), n_fft 1024, hop 160 (100 pixels per second), the top 80 dB as 8-bit
+  grayscale, low frequencies at the bottom; clips shorter than 1 s are padded with silence.
+- Every question of the request sees every image and clip. Their input tokens count in `usage.input_tokens`
+  (see [Usage metering](#usage-metering)).
+- WebM and some other compressed audio is decoded with `ffmpeg` when the server has it installed.
+  Decoding stops just beyond the duration limit so long clips can be rejected without expanding the whole
+  recording. Clips exceeding the 64 MiB decoded-audio budget are also refused.
+
 ## Local inference
 
 `saina[local]` loads released checkpoints at a pinned Hub commit. Helm 2 checkpoints answer every
@@ -128,9 +195,11 @@ CPU operation is supported by the loader but is not an optimized ONNX release.
 
 ## JavaScript / TypeScript
 
-Source: `clients/javascript`; planned registry package: `@run-saina/sdk`.
+Source: `clients/javascript`; registry package: `@run-saina/sdk`.
 Exports `Saina` and `SainaError`, retaining `SainaHelm` aliases for compatibility. Same idempotency, retry,
 error and metadata API (`askWithMetadata`, `systemOne`, `balance`, `usage`, `requests`); credits are `BigInt`.
+`images` and `audios` take data URLs, http(s) URLs, `Blob`/`File` objects, `ArrayBuffer`s or typed arrays
+(`Buffer`); the client sends them as data URLs.
 
 ## Serving and contracts
 
@@ -189,8 +258,11 @@ order sent; each part is tokenized on its own with the pinned tokenizer. Prompt 
 and re-reading the `state` for each question, are not counted. The responses' `X-Saina-Billable-Tokens`
 header repeats this number; `X-Saina-Input-Tokens` is the length of the token sequences actually fed to the
 model (one sequence per question for the original Helm, one for the whole request for Helm 2).
+Images and audio clips add the input tokens the model reads for them: one per 32 × 32 pixels of each image after
+it is resized as above, and the same for each clip's spectrogram (a 10-second clip is 124 tokens). The
+`X-Saina-Media-Tokens` header gives that part on its own.
 `pip install 'saina[tokenize]'` installs `saina.tokenize.TokenCounter`, which computes both without
-torch:
+running the model (add `saina[media]` for requests with images or audio):
 
 ```python
 from saina.tokenize import TokenCounter

@@ -91,10 +91,11 @@ class Billable:
 class Bill:
     context_tokens: int
     question_tokens: tuple  # per question, in request order; the context is not included
+    media_tokens: int = 0  # input tokens of every image and audio spectrogram the model reads
 
     @property
     def total(self):
-        return self.context_tokens + sum(self.question_tokens)
+        return self.context_tokens + sum(self.question_tokens) + self.media_tokens
 
 
 def _keyed(mapping):
@@ -129,11 +130,13 @@ def billable_systemone(request):
     return Billable(as_sent(request.state), tuple(questions))
 
 
-def bill(billable, counter):
+def bill(billable, counter, media=None):
     """Billable input tokens. `counter.count_text` tokenizes one part with the pinned tokenizer;
-    each part is counted on its own, so a client with the same tokenizer can reproduce the count."""
+    each part is counted on its own, so a client with the same tokenizer can reproduce the count.
+    Images and audio clips count the input tokens the model reads for them (`counter.media_tokens`)."""
     return Bill(counter.count_text(billable.context),
-                tuple(sum(counter.count_text(p) for p in parts) for parts in billable.questions))
+                tuple(sum(counter.count_text(p) for p in parts) for parts in billable.questions),
+                counter.media_tokens(media) if media else 0)
 
 
 def check_capabilities(prepared, supported_modes):
@@ -147,13 +150,21 @@ def shared(encoder):
     return getattr(encoder, 'shared_trunk_pass', False) is True
 
 
-def encode_all(prepared, encoder):
+def encode_all(prepared, encoder, media=None):
     """Every model input of the request, encoded before any inference, so a late invalid question fails
-    the request early: one input per question, or a single input for all of them on a shared-pass model."""
+    the request early: one input per question, or a single input for all of them on a shared-pass model.
+    `media` (decoded images and audio spectrograms) needs a model that reads them."""
+    if media and not set(getattr(encoder, 'inputs', ('text',))) - {'text'}:
+        raise ValueError('This model reads text only')
     if shared(encoder):
         if len({q.context for q in prepared}) != 1:
             raise ValueError('A shared pass needs one context for every question')
-        return [list(encoder.encode_shared(prepared[0].context, [(q.question, q.choices, q.mode) for q in prepared]))]
+        questions = [(q.question, q.choices, q.mode) for q in prepared]
+        if media:
+            return [list(encoder.encode_shared(prepared[0].context, questions, media=media))]
+        return [list(encoder.encode_shared(prepared[0].context, questions))]
+    if media:
+        raise ValueError('Images and audio need a shared-pass model')
     return [list(encoder.encode(q.context, q.question, q.choices, q.mode)) for q in prepared]
 
 
@@ -168,37 +179,39 @@ class Execution:
     probabilities: list
     input_tokens: list  # model-input length per forward pass, for the metering check
     billable_tokens: int  # what the request is billed for, reported as usage.input_tokens
+    media_tokens: int = 0  # the part of billable_tokens that is images and audio
 
     @property
     def total_input_tokens(self):
         return sum(self.input_tokens)
 
 
-def execute(prepared, scorer, billable, encoded=None, expected_input_tokens=None):
+def execute(prepared, scorer, billable, encoded=None, expected_input_tokens=None, media=None):
     """Run every question and report both counts from what was actually encoded and sent.
 
     Counts are never read from mutable scorer state: each model-input count is the length of the
     token sequence passed to the model (`scorer.forward` per question, or `scorer.forward_shared` once
     for a shared-pass model), and the billable count comes from the request text.
     `expected_input_tokens` checks model-input tokens. Every model is billed for the request text, however
-    many passes it makes over it. A request is all-or-nothing.
+    many passes it makes over it, plus the input tokens of its images and audio. A request is all-or-nothing.
     """
     check_capabilities(prepared, getattr(scorer, 'supported_modes', ('single_label',)))
     if encoded is None:
-        encoded = encode_all(prepared, scorer)
-    billable_tokens = bill(billable, scorer).total
+        encoded = encode_all(prepared, scorer, media)
+    billed = bill(billable, scorer, media)
     if len(encoded) != (1 if shared(scorer) else len(prepared)):
         raise MeteringMismatch('Missing encoded input')
     counts = [len(ids) for ids in encoded]
     if expected_input_tokens is not None and sum(counts) != expected_input_tokens:
         raise MeteringMismatch('Encoded input does not match the expected token count')
     if shared(scorer):
-        vectors = [list(p) for p in scorer.forward_shared(
-            encoded[0], [len(q.choices) for q in prepared], [q.mode for q in prepared])]
+        sizes, modes = [len(q.choices) for q in prepared], [q.mode for q in prepared]
+        vectors = [list(p) for p in (scorer.forward_shared(encoded[0], sizes, modes, media=media) if media
+                                     else scorer.forward_shared(encoded[0], sizes, modes))]
         if len(vectors) != len(prepared):
             raise ValueError('Model returned the wrong number of answers')
     else:
         vectors = [list(scorer.forward(ids, len(q.choices), q.mode)) for q, ids in zip(prepared, encoded)]
     for q, p in zip(prepared, vectors):
         validate_distribution(p, len(q.labels), independent=q.mode == 'multi_label')
-    return Execution(vectors, counts, billable_tokens)
+    return Execution(vectors, counts, billed.total, billed.media_tokens)

@@ -180,3 +180,35 @@ test('parseCredits never rounds numeric credit fields', () => {
   try { assert.equal(parseCredits(big).balance, 9007199254740993n); }
   catch (e) { assert.ok(e instanceof SainaError); }
 });
+
+test('images and audio are sent as data URLs typed by their content', async () => {
+  const {imageDataUrl, audioDataUrl} = await import('./index.js');
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0]);
+  const wav = new TextEncoder().encode('RIFF\0\0\0\0WAVEfmt ');
+  const b64 = bytes => Buffer.from(bytes).toString('base64');
+  assert.equal(await imageDataUrl(png), `data:image/png;base64,${b64(png)}`);
+  assert.equal(await imageDataUrl(new Blob([png])), `data:image/png;base64,${b64(png)}`);
+  assert.equal(await audioDataUrl(wav.buffer), `data:audio/wav;base64,${b64(wav)}`);
+  assert.equal(await imageDataUrl('data:image/jpeg;base64,/9j/'), 'data:image/jpeg;base64,/9j/');
+  await assert.rejects(imageDataUrl(new Uint8Array([1, 2, 3])), /PNG, JPEG or WebP/);
+  await assert.rejects(audioDataUrl(42), /An audio clip is/);
+  const {client, calls} = scripted([json(response), json({model: 'm', answers: {u: {type: 'noul', noul: .5}}, usage: {input_tokens: 1, output_tokens: 0}})]);
+  await client.ask({...request, images: [png, 'data:image/webp;base64,UklGRg=='], audios: [new Blob([wav])]});
+  await client.systemOne({model: 'm', state: 's', images: [Buffer.from(png)], questions: {u: {type: 'noul', instructions: 'U?'}}});
+  const [ask, s1] = calls.map(c => JSON.parse(c.init.body));
+  assert.deepEqual(ask.images, [`data:image/png;base64,${b64(png)}`, 'data:image/webp;base64,UklGRg==']);
+  assert.deepEqual(ask.audios, [`data:audio/wav;base64,${b64(wav)}`]);
+  assert.deepEqual(s1.images, [`data:image/png;base64,${b64(png)}`]);
+  assert.equal(JSON.parse(calls[0].init.body).questions.tags.type, 'multi_choice');
+});
+
+test('http(s) images are downloaded with the client fetch; requests without media are unchanged', async () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]);
+  const {client, calls} = scripted([new Response(png), json(response), json(response)]);
+  await client.ask({...request, images: ['https://example.com/cat.png']});
+  assert.equal(calls[0].url, 'https://example.com/cat.png');
+  assert.ok(JSON.parse(calls[1].init.body).images[0].startsWith('data:image/png;base64,'));
+  await client.ask(request);
+  assert.deepEqual(JSON.parse(calls[2].init.body), request);
+  await assert.rejects(client.ask({...request, images: 'data:image/png;base64,AA=='}), /images must be an array/);
+});

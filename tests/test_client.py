@@ -251,3 +251,36 @@ class LocalServerTests(unittest.TestCase):
         self.assertEqual(seen[0][0], '/v1/systemone')
 
 if __name__=='__main__': unittest.main()
+
+
+class MediaClientTests(unittest.TestCase):
+    def test_images_and_audio_are_sent_as_data_urls(self):
+        import base64
+        import tempfile
+        png, flac = b'\x89PNG\r\n\x1a\n' + b'\0' * 8, b'fLaC' + b'\0' * 8
+        with tempfile.NamedTemporaryFile(suffix='.bin') as f:
+            f.write(flac)
+            f.flush()
+            c = client(Reply(RESULT), Reply({'model': 'm', 'answers': {'u': {'type': 'noul', 'noul': .5}}}))
+            c.ask(**ASK, images=[png, 'data:image/jpeg;base64,/9j/'], audios=[f.name])
+            c.system_one(model='m', state='s', questions={'u': {'type': 'noul', 'instructions': 'U?'}}, images=[png])
+        sent = [json.loads(r.data) for r in c._opener.requests]
+        self.assertEqual(sent[0]['images'], ['data:image/png;base64,' + base64.b64encode(png).decode(),
+                                             'data:image/jpeg;base64,/9j/'])
+        self.assertEqual(sent[0]['audios'], ['data:audio/flac;base64,' + base64.b64encode(flac).decode()])
+        self.assertEqual(sent[1]['images'], ['data:image/png;base64,' + base64.b64encode(png).decode()])
+        self.assertNotIn('audios', sent[1])
+
+    def test_requests_without_media_are_unchanged(self):
+        c = client(Reply(RESULT))
+        c.ask(**ASK)
+        self.assertEqual(set(json.loads(c._opener.requests[0].data)), {'model', 'state', 'questions', 'mode'})
+
+    def test_media_that_cannot_be_read_fails_before_sending(self):
+        from saina.media import MediaError
+        c = client()
+        with self.assertRaisesRegex(MediaError, 'Send WAV, FLAC'):
+            c.ask(**ASK, audios=[b'not audio'])
+        with self.assertRaisesRegex(ValueError, 'images must be a list'):
+            c.ask(**ASK, images='data:image/png;base64,AAAA')
+        self.assertEqual(c._opener.requests, [])

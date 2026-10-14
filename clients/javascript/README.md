@@ -31,6 +31,26 @@ const result = await client.ask({
 });
 ```
 
+## Images and audio
+
+For a model that reads them (see `inputs` in `/v1/models`), pass `images` and `audios`: data URLs, http(s)
+URLs, `Blob`/`File` objects, `ArrayBuffer`s or typed arrays such as a Node `Buffer`. The client sends them as
+base64 data URLs; every question sees all of them.
+
+```js
+const photo = document.querySelector('input[type=file]').files[0];
+const result = await client.ask({
+  model: 'saina-helm',
+  state: 'The customer attached a photo of the delivery and a voice note.',
+  images: [photo],      // PNG, JPEG or WebP; at most 8, each at most 10,000,000 bytes
+  audios: [voiceNote],  // a Blob: WAV, FLAC, MP3, Ogg or WebM; at most 4, each at most 10 s
+  questions: {damaged: {type: 'yes_no', question: 'Is the item damaged?'}},
+});
+```
+
+A text-only model refuses images and audio with `InvalidRequest`; `videos` are not supported yet.
+`imageDataUrl(value)` and `audioDataUrl(value)` convert one input ahead of time.
+
 ## Idempotency and retries
 
 Inference (`ask`, `systemOne`) is retried automatically only when the call carries an `Idempotency-Key`:

@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- **Images and audio.** `/v1/ask` and `/v1/systemone` take `images` (PNG, JPEG or WebP) and `audios` (WAV, FLAC,
+  MP3, Ogg or WebM) as base64 data URLs: at most 8 images and 4 clips per request, each at most 10,000,000 bytes;
+  clips at most 10 s (longer clips are refused, never cut). Images are read at up to 1.6 megapixels before the
+  text; each clip is read as a log-mel spectrogram image after the images
+  (`saina.media.mel_spectrogram_png`). The Python and JavaScript clients and `HelmModel.ask` also accept local
+  paths (Python), http(s) URLs, bytes, PIL images, `(samples, sample_rate)` arrays, `Blob`s and `ArrayBuffer`s,
+  and send data URLs. `videos` are refused with `invalid_request` (not supported yet).
+- **Models declare their inputs.** `/healthz` and `/v1/models` list `inputs` (`["text"]`, or with `"image"` and
+  `"audio"`); `/v1/models` adds image and audio entries to `input_modalities`. Text-only models such as
+  `saina-helm-2-0.8b` refuse images and audio with `invalid_request` (`saina-helm-2-0.8b accepts text only`).
+- **Image and audio tokens are counted.** `usage.input_tokens`, `X-Saina-Billable-Tokens`,
+  `X-Saina-Input-Tokens` and `TokenCounter.bill_*`/`count_*` include the input tokens of every image and
+  spectrogram; `X-Saina-Media-Tokens` gives that part alone. Text-only requests count as before.
+- Checkpoint format 3: shared-pass models with a vision tower (`saina_inputs` in `config.json`, the image
+  processor in `preprocessor_config.json`); `scripts/build_multimodal_package.py` builds one.
+- New `saina[media]` extra (Pillow, NumPy, SciPy, soundfile) for decoding images and audio.
+
 ## 0.3.2
 
 - **Helm 2 is billed for the text sent, like the original Helm.** In 0.3.0 and 0.3.1, a Helm 2 request was
