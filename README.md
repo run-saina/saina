@@ -141,6 +141,8 @@ EOF
 - Every question of the request sees every image and clip. Their input tokens count in `usage.input_tokens`
   (see [Usage metering](#usage-metering)).
 - WebM and some other compressed audio is decoded with `ffmpeg` when the server has it installed.
+  Decoding stops just beyond the duration limit so long clips can be rejected without expanding the whole
+  recording. Clips exceeding the 64 MiB decoded-audio budget are also refused.
 
 ## Local inference
 

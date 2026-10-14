@@ -36,6 +36,8 @@ MAX_ASPECT_RATIO = 200
 SAMPLE_RATE = 16_000
 MAX_AUDIO_SECONDS = 10.0
 MIN_AUDIO_SECONDS = 1.0  # shorter clips are padded with silence at the end
+# Bound native-rate PCM allocations and the fallback's temporary WAV, even for unusual rates/channels.
+MAX_DECODED_AUDIO_BYTES = 64 * 1024 * 1024
 N_FFT = 1024
 HOP = 160  # 10 ms: one spectrogram column per hop, 100 columns per second
 N_MELS = 128
@@ -278,8 +280,8 @@ def decode_image(data, where='image'):
         raise MediaError(f'{where} could not be decoded') from None
 
 
-def _ffmpeg_decode(data):
-    """Float32 WAV bytes of any audio ffmpeg reads (used for WebM and anything libsndfile cannot read)."""
+def _ffmpeg_decode(data, where='audio clip'):
+    """Bounded float32 WAV bytes for formats libsndfile cannot read, preserving rate and channels."""
     ffmpeg = shutil.which('ffmpeg')
     if not ffmpeg:
         return None
@@ -288,26 +290,57 @@ def _ffmpeg_decode(data):
         with open(source, 'wb') as f:
             f.write(data)
         try:
-            subprocess.run([ffmpeg, '-nostdin', '-v', 'error', '-i', source, '-vn', '-acodec', 'pcm_f32le',
-                            '-f', 'wav', target], check=True, timeout=60, capture_output=True)
+            # One extra second guarantees an excess sample even at a sample rate of 1 Hz. The caller
+            # rejects that excess; a truncated clip is never accepted. Keep the native rate/channels
+            # so valid clips still use the same channel averaging and SciPy resampler as before.
+            subprocess.run([ffmpeg, '-nostdin', '-v', 'error', '-i', source, '-vn',
+                            '-t', str(MAX_AUDIO_SECONDS + 1), '-fs', str(MAX_DECODED_AUDIO_BYTES),
+                            '-acodec', 'pcm_f32le',
+                            '-f', 'wav', target], check=True, timeout=60,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except (subprocess.SubprocessError, OSError):
             return None
         with open(target, 'rb') as f:
-            return f.read()
+            wav = f.read(MAX_DECODED_AUDIO_BYTES)
+        if len(wav) == MAX_DECODED_AUDIO_BYTES:
+            raise MediaError(f'{where} exceeds the decoded audio size limit')
+        return wav
+
+
+def _read_audio(data, where, *, duration_known=True):
+    """Read at most ten seconds plus an excess frame, with a separate PCM allocation budget."""
+    import soundfile as sf
+    with sf.SoundFile(io.BytesIO(data)) as source:
+        rate = source.samplerate
+        _check_audio_frames(source.frames, rate, where, duration_known=duration_known)
+        # Do not trust the frame count alone: bound the read even when a codec reports an unknown or
+        # inaccurate duration. The extra frame distinguishes a long recording from an exact 10 s one.
+        frame_budget = MAX_DECODED_AUDIO_BYTES // (source.channels * 4)
+        if source.frames > frame_budget:
+            raise MediaError(f'{where} exceeds the decoded audio size limit')
+        frames = min(int(MAX_AUDIO_SECONDS * rate), frame_budget) + 1
+        samples = source.read(frames=frames, dtype='float32', always_2d=True)
+        _check_audio_frames(len(samples), rate, where, duration_known=duration_known)
+        if samples.nbytes > MAX_DECODED_AUDIO_BYTES:
+            raise MediaError(f'{where} exceeds the decoded audio size limit')
+        return samples, rate
 
 
 def decode_audio(data, where='audio clip'):
     """``(float32 mono samples, sample rate)`` of encoded audio: channels are averaged."""
     import numpy as np
-    import soundfile as sf
     try:
-        x, rate = sf.read(io.BytesIO(data), dtype='float32', always_2d=True)
+        x, rate = _read_audio(data, where)
+    except MediaError:
+        raise
     except Exception:
-        wav = _ffmpeg_decode(data)
+        wav = _ffmpeg_decode(data, where)
         if wav is None:
             raise MediaError(f'{where} could not be decoded') from None
         try:
-            x, rate = sf.read(io.BytesIO(wav), dtype='float32', always_2d=True)
+            x, rate = _read_audio(wav, where, duration_known=False)
+        except MediaError:
+            raise
         except Exception:
             raise MediaError(f'{where} could not be decoded') from None
     x = x.mean(axis=1)
@@ -328,10 +361,15 @@ def resample(x, rate, target=SAMPLE_RATE):
     return resample_poly(x, target // g, int(rate) // g).astype(np.float32)
 
 
-def check_duration(samples, rate, where='audio clip'):
-    if len(samples) > MAX_AUDIO_SECONDS * rate:
-        raise MediaError(f'{where} is {len(samples) / rate:.1f} s long; at most {MAX_AUDIO_SECONDS:.1f} s '
+def _check_audio_frames(frames, rate, where, *, duration_known=True):
+    if frames > MAX_AUDIO_SECONDS * rate:
+        duration = f'{frames / rate:.1f} s long' if duration_known else f'longer than {MAX_AUDIO_SECONDS:.1f} s'
+        raise MediaError(f'{where} is {duration}; at most {MAX_AUDIO_SECONDS:.1f} s '
                          'are accepted (shorten it; nothing is cut off)')
+
+
+def check_duration(samples, rate, where='audio clip'):
+    _check_audio_frames(len(samples), rate, where)
 
 
 def prepare_waveform(samples, sample_rate):

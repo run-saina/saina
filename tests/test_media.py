@@ -171,6 +171,44 @@ class DecodeTests(unittest.TestCase):
             media.audio_image(wav(10.5), 'audios[2]')
         self.assertEqual(media.audio_image(wav(10.0, rate=44100)).size, (1000, 128))  # exactly 10 s at 44.1 kHz
 
+    def test_compressed_long_audio_is_rejected_before_allocating_samples(self):
+        buffer = io.BytesIO()
+        soundfile.write(buffer, np.zeros(60 * 16000, dtype=np.float32), 16000, format='FLAC')
+        compressed = buffer.getvalue()
+        self.assertLess(len(compressed), 3000)  # a tiny upload must not expand into the full minute of PCM
+        with patch.object(soundfile.SoundFile, 'read') as read, patch.object(media, '_ffmpeg_decode') as fallback:
+            with self.assertRaisesRegex(MediaError, r'audios\[2\] is 60.0 s long; at most 10.0 s'):
+                media.audio_image(compressed, 'audios[2]')
+        read.assert_not_called()
+        fallback.assert_not_called()
+
+    def test_audio_reads_are_bounded_even_with_inaccurate_duration_metadata(self):
+        with patch.object(soundfile, 'SoundFile') as open_audio, patch.object(media, '_ffmpeg_decode') as fallback:
+            source = open_audio.return_value.__enter__.return_value
+            source.samplerate, source.channels, source.frames = 16000, 2, 160000
+            source.read.return_value = np.zeros((160001, 2), dtype=np.float32)
+            with self.assertRaisesRegex(MediaError, r'audios\[1\].*at most 10.0 s'):
+                media.decode_audio(b'encoded audio', 'audios[1]')
+            source.read.assert_called_once_with(frames=160001, dtype='float32', always_2d=True)
+        fallback.assert_not_called()
+
+    def test_decoded_audio_size_is_checked_before_allocating_samples(self):
+        with patch.object(media, 'MAX_DECODED_AUDIO_BYTES', 1000), \
+                patch.object(soundfile.SoundFile, 'read') as read, patch.object(media, '_ffmpeg_decode') as fallback:
+            with self.assertRaisesRegex(MediaError, r'audios\[0\].*decoded audio size limit'):
+                media.decode_audio(wav(1.0), 'audios[0]')
+        read.assert_not_called()
+        fallback.assert_not_called()
+
+    def test_native_audio_keeps_samples_and_rejects_one_excess_frame(self):
+        data = wav(1.5, rate=44100, channels=2)
+        expected, rate = soundfile.read(io.BytesIO(data), dtype='float32', always_2d=True)
+        actual, actual_rate = media.decode_audio(data)
+        self.assertEqual(actual_rate, rate)
+        np.testing.assert_array_equal(actual, expected.mean(axis=1))
+        with self.assertRaisesRegex(MediaError, 'at most 10.0 s'):
+            media.decode_audio(media._wav(np.zeros(441001), 44100))
+
     def test_audio_is_mono_16k_and_short_clips_are_padded(self):
         self.assertEqual(media.audio_image(wav(0.25)).size, (100, 128))  # padded to 1 s
         stereo, mono = media.audio_image(wav(1.5, channels=2)), media.audio_image(wav(1.5))
@@ -194,6 +232,57 @@ class DecodeTests(unittest.TestCase):
                 image = media.decode_media(raw).images[0]
                 self.assertEqual(image.size[1], 128)
                 self.assertAlmostEqual(image.size[0], 120, delta=8)  # codec padding may add a few frames
+
+    def test_ffmpeg_stops_long_audio_and_preserves_valid_audio(self):
+        import shutil
+        import subprocess
+        if not shutil.which('ffmpeg'):
+            self.skipTest('ffmpeg not installed')
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            for seconds in (10, 60):
+                # FLAC supplies a compact long input while forcing the fallback below exercises the
+                # same FFmpeg command used for WebM. Native rate/channels must remain unchanged.
+                source = root / f'{seconds}.flac'
+                soundfile.write(source, np.zeros((seconds * 16000, 2), dtype=np.float32), 16000)
+                encoded = source.read_bytes()
+                decoded = media._ffmpeg_decode(encoded)
+                info = soundfile.info(io.BytesIO(decoded))
+                self.assertEqual((info.samplerate, info.channels), (16000, 2))
+                self.assertEqual(info.frames, min(seconds, 11) * 16000)
+                self.assertLess(len(decoded), 1_500_000)
+                real_read = media._read_audio
+
+                def fallback_only(data, where, **kwargs):
+                    if data == encoded:
+                        raise RuntimeError('force FFmpeg fallback')
+                    return real_read(data, where, **kwargs)
+
+                with patch.object(media, '_read_audio', side_effect=fallback_only):
+                    if seconds == 10:
+                        samples, rate = media.decode_audio(encoded)
+                        self.assertEqual((len(samples), rate), (160000, 16000))
+                    else:
+                        with self.assertRaisesRegex(MediaError, r'audios\[3\] is longer than 10.0 s'):
+                            media.decode_audio(encoded, 'audios[3]')
+            # Valid compressed input must yield the same native samples as the previous decoder.
+            (root / 'in.wav').write_bytes(wav(1.2, rate=48000, channels=2))
+            subprocess.run(['ffmpeg', '-v', 'error', '-i', str(root / 'in.wav'), '-c:a', 'libopus',
+                            str(root / 'clip.webm')], check=True)
+            subprocess.run(['ffmpeg', '-v', 'error', '-i', str(root / 'clip.webm'), '-vn',
+                            '-acodec', 'pcm_f32le', str(root / 'reference.wav')], check=True)
+            actual, rate = media.decode_audio((root / 'clip.webm').read_bytes())
+            expected, expected_rate = soundfile.read(root / 'reference.wav', dtype='float32', always_2d=True)
+            self.assertEqual(rate, expected_rate)
+            np.testing.assert_array_equal(actual, expected.mean(axis=1))
+
+    def test_ffmpeg_output_size_limit_never_accepts_a_truncated_clip(self):
+        import shutil
+        if not shutil.which('ffmpeg'):
+            self.skipTest('ffmpeg not installed')
+        with patch.object(media, 'MAX_DECODED_AUDIO_BYTES', 4096):
+            with self.assertRaisesRegex(MediaError, r'audios\[0\].*decoded audio size limit'):
+                media._ffmpeg_decode(wav(1.0), 'audios[0]')
 
 
 @unittest.skipUnless(HAVE_MEDIA, 'requires saina[media]')
