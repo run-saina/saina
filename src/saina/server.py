@@ -150,6 +150,8 @@ CATALOG = {
                         'hugging_face_id': 'run-saina/saina-helm-0.8b'},
     'saina-helm-2-0.8b': {'name': 'Saina: Helm 2 0.8B', 'created': 1791590400,
                           'hugging_face_id': 'run-saina/saina-helm-2-0.8b'},
+    'saina-helm-2-omni-0.8b': {'name': 'Saina: Helm 2 Omni 0.8B', 'created': 1792022400,
+                               'hugging_face_id': 'run-saina/saina-helm-2-omni-0.8b'},
 }
 
 

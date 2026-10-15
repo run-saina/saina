@@ -23,7 +23,7 @@ export type AudioInput = string | Blob | ArrayBuffer | ArrayBufferView;
  */
 export interface MediaFields {images?: ImageInput[]; audios?: AudioInput[]}
 /** `saina-helm`: whichever Helm the endpoint serves. `helm-0.8b` is the deprecated 0.1 name of `saina-helm-0.8b`. */
-export type AskRequest = {model: 'saina-helm' | 'saina-helm-2-0.8b' | 'saina-helm-0.8b' | 'helm-0.8b' | (string & {}); state: Content} & MediaFields & (
+export type AskRequest = {model: 'saina-helm' | 'saina-helm-2-0.8b' | 'saina-helm-2-omni-0.8b' | 'saina-helm-0.8b' | 'helm-0.8b' | (string & {}); state: Content} & MediaFields & (
   | {mode?: 'distribution'; questions: Record<string, Question>}
   | {mode: 'decision'; threshold?: number; min_margin?: number; questions: Record<string, DecisionQuestion>});
 export type Reason = 'accepted' | 'below_threshold' | 'below_margin' | 'tie';
