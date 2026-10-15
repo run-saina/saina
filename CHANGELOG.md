@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
+
+- **Saina Helm 2 Omni 0.8B** (`saina-helm-2-omni-0.8b`, [run-saina/saina-helm-2-omni-0.8b](https://huggingface.co/run-saina/saina-helm-2-omni-0.8b)):
+  the first Helm that reads text, images and audio, listed in the server's model catalog.
 
 - **Images and audio.** `/v1/ask` and `/v1/systemone` take `images` (PNG, JPEG or WebP) and `audios` (WAV, FLAC,
   MP3, Ogg or WebM) as base64 data URLs: at most 8 images and 4 clips per request, each at most 10,000,000 bytes;
