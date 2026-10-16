@@ -654,3 +654,47 @@ class SpecialistTests(unittest.TestCase):
         self.assertFalse(hasattr(text, 'specialists'))
         with self.assertRaises(RuntimeError):
             attach_specialists([text], 'run-saina/x@' + 'e' * 40, loader)
+
+
+@unittest.skipUnless(HAVE_FASTAPI, 'fastapi and httpx required')
+class StandaloneSpecialistTests(unittest.TestCase):
+    """A checkpoint with a specialist merged in serves that specialist without its base model."""
+    def merged(self, name='mechanical'):
+        s = SharedFakeScorer(); s.model_id, s.revision = 'saina-helm-2-omni-0.8b', 'f' * 40
+        s.inputs, s.specialist, s.specialist_revision, s.specialist_description = ('text', 'audio'), name, 'f' * 40, 'Machines'
+        s.specialists, s.specialist_only = {name: s}, True
+        return s
+
+    def ask(self, c, specialist=None):
+        body = {'model': 'saina-helm-2-omni-0.8b', 'state': 's', 'questions': {'ok': {'type': 'yes_no', 'question': 'OK?'}}}
+        if specialist is not None:
+            body['specialist'] = specialist
+        return c.post('/v1/ask', headers={'Authorization': 'Bearer k'}, json=body)
+
+    def test_answers_only_as_its_specialist(self):
+        mech = self.merged()
+        with TestClient(create_app(scorers=[mech], api_key='k')) as c:
+            r = self.ask(c, 'mechanical')
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual((r.json()['model'], r.json()['specialist']), ('saina-helm-2-omni-0.8b', 'mechanical'))
+            r = self.ask(c)
+            self.assertEqual(r.status_code, 404)
+            self.assertIn('only as its specialist mechanical', r.json()['error']['message'])
+            self.assertEqual(self.ask(c, 'legal').status_code, 404)
+            self.assertEqual(len(mech.calls), 1)
+            self.assertEqual(c.get('/v1/specialists').json()['data'], [{
+                'id': 'mechanical', 'model': 'saina-helm-2-omni-0.8b', 'revision': 'f' * 40,
+                'inputs': ['text', 'audio'], 'description': 'Machines'}])
+
+    def test_gather_joins_a_base_or_another_standalone_of_the_same_release(self):
+        from saina.server import gather_specialists
+        text = SharedFakeScorer(); text.model_id = 'saina-helm-2-0.8b'
+        base = SharedFakeScorer(); base.model_id = 'saina-helm-2-omni-0.8b'
+        mech, legal = self.merged(), self.merged('legal')
+        self.assertEqual(gather_specialists([text, mech, legal]), [text, mech])
+        self.assertEqual(sorted(mech.specialists), ['legal', 'mechanical'])
+        mech, legal = self.merged(), self.merged('legal')
+        self.assertEqual(gather_specialists([mech, base, legal]), [base])
+        self.assertEqual(sorted(base.specialists), ['legal', 'mechanical'])
+        with self.assertRaises(RuntimeError):
+            gather_specialists([self.merged(), self.merged()])

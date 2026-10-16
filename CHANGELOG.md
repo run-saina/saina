@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0
+
+- **Standalone specialists.** A checkpoint can carry a specialist merged into its weights: its `config.json` names
+  the model it belongs to (`saina_model`) and the specialist (`saina_specialist`, with an optional
+  `saina_specialist_description`). It needs no base checkpoint and answers only as that specialist:
+  `{"model": "saina-helm-2-omni-0.8b", "specialist": "mechanical"}`; a request without `specialist` is a 404. Serve it
+  with `SAINA_MODELS` like any model, on its own server or beside its base, so a model and its specialists can be
+  deployed and updated independently. Local use: `HelmModel.from_pretrained(<merged checkpoint>)` and
+  `helm.ask(specialist=...)`.
+
 ## 0.5.0
 
 - **Domain specialists.** A specialist is a model trained further for one domain, shipped as a small set of

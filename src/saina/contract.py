@@ -226,6 +226,10 @@ def respond(request, prepared, execution, model_id=LEGACY_MODEL_ID):
 def specialist_of(scorer, name):
     """The scorer that answers for specialist `name` of a served model (the model itself when unset)."""
     if not name:
+        if getattr(scorer, 'specialist_only', False):
+            model_id = getattr(scorer, 'model_id', LEGACY_MODEL_ID)
+            known = ', '.join(sorted(scorer.specialists))
+            raise ModelNotServed(f'{model_id} is served here only as its specialist {known}; send "specialist"')
         return scorer
     found = getattr(scorer, 'specialists', {}).get(name)
     if found is None:
