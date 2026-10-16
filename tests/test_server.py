@@ -587,3 +587,70 @@ class MediaRouteTests(unittest.TestCase):
             self.assertEqual(mm['input_modalities'][1]['supported_inputs']['max_items'], 8)
             self.assertEqual(mm['input_modalities'][2]['supported_inputs']['max_seconds'], 10.0)
             self.assertEqual([m['type'] for m in text['input_modalities']], ['text'])
+
+
+@unittest.skipUnless(HAVE_FASTAPI, 'fastapi and httpx required')
+class SpecialistTests(unittest.TestCase):
+    def setUp(self):
+        self.omni = SharedFakeScorer(); self.omni.model_id, self.omni.revision = 'saina-helm-2-omni-0.8b', 'c' * 40
+        self.omni.inputs = ('text', 'image', 'audio')
+        self.mech = SharedFakeScorer(); self.mech.model_id = 'saina-helm-2-omni-0.8b'
+        self.mech.inputs, self.mech.specialist = ('text', 'audio'), 'mechanical'
+        self.mech.specialist_revision, self.mech.specialist_description = 'd' * 40, 'Machine faults from sound'
+        self.omni.specialists = {'mechanical': self.mech}
+        self.text = SharedFakeScorer(); self.text.model_id = 'saina-helm-2-0.8b'
+        self.app = create_app(scorers=[self.text, self.omni], api_key='k')
+
+    def ask(self, c, specialist=None, model='saina-helm-2-omni-0.8b', route='/v1/ask'):
+        body = ({'model': model, 'state': 's', 'questions': {'ok': {'type': 'yes_no', 'question': 'OK?'}}}
+                if route == '/v1/ask' else
+                {'model': model, 'state': 's', 'questions': {'u': {'type': 'noul', 'instructions': 'Urgent?'}}})
+        if specialist is not None:
+            body['specialist'] = specialist
+        return c.post(route, headers={'Authorization': 'Bearer k'}, json=body)
+
+    def test_specialist_answers_only_when_selected(self):
+        with TestClient(self.app) as c:
+            r = self.ask(c)
+            self.assertEqual((r.status_code, r.json()['model']), (200, 'saina-helm-2-omni-0.8b'))
+            self.assertNotIn('specialist', r.json())
+            r = self.ask(c, 'mechanical')
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual((r.json()['model'], r.json()['specialist']), ('saina-helm-2-omni-0.8b', 'mechanical'))
+            r = self.ask(c, 'mechanical', route='/v1/systemone')
+            self.assertEqual((r.status_code, r.json()['specialist']), (200, 'mechanical'))
+            self.assertEqual((len(self.omni.calls), len(self.mech.calls)), (1, 2))
+
+    def test_unknown_or_foreign_specialist_is_not_found(self):
+        with TestClient(self.app) as c:
+            r = self.ask(c, 'legal')
+            self.assertEqual(r.status_code, 404)
+            self.assertIn('available: mechanical', r.json()['error']['message'])
+            # Specialists belong to one model: the text model has none.
+            self.assertEqual(self.ask(c, 'mechanical', model='saina-helm-2-0.8b').status_code, 404)
+            self.assertEqual(self.ask(c, 'Bad Name').status_code, 422)
+            self.assertEqual(self.mech.calls, [])
+
+    def test_listing(self):
+        with TestClient(self.app) as c:
+            self.assertEqual(c.get('/v1/specialists').json()['data'], [{
+                'id': 'mechanical', 'model': 'saina-helm-2-omni-0.8b', 'revision': 'd' * 40,
+                'inputs': ['text', 'audio'], 'description': 'Machine faults from sound'}])
+            text, omni = c.get('/v1/models').json()['data']
+            self.assertEqual((text['specialists'], omni['specialists']), ([], ['mechanical']))
+            self.assertEqual(c.get('/healthz').json()['specialists'][0]['id'], 'mechanical')
+
+    def test_attach_finds_the_matching_base(self):
+        from saina.server import attach_specialists
+        text, omni = SharedFakeScorer(), SharedFakeScorer()
+
+        def loader(base, checkpoint, revision):
+            if base is not omni:
+                raise ValueError('trained for different base weights')
+            special = SharedFakeScorer(); special.specialist = 'mechanical'
+            return special
+        attach_specialists([text, omni], 'run-saina/x@' + 'e' * 40, loader)
+        self.assertEqual(list(omni.specialists), ['mechanical'])
+        self.assertFalse(hasattr(text, 'specialists'))
+        with self.assertRaises(RuntimeError):
+            attach_specialists([text], 'run-saina/x@' + 'e' * 40, loader)

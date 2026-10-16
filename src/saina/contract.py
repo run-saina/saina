@@ -78,8 +78,13 @@ TypedQuestion = Annotated[YesNo | SingleChoice | Rating | MultiChoice, Field(dis
 MediaList = list[str] | None
 
 
+SpecialistName = Annotated[str, Field(pattern=r'^[a-z][a-z0-9-]{0,31}$')]
+
+
 class AskRequest(StrictModel):
     model: Annotated[str, Field(min_length=1, max_length=64)]
+    # A domain specialist of the model (see GET /v1/specialists); unset answers with the model itself.
+    specialist: SpecialistName | None = None
     state: Content
     images: MediaList = None
     audios: MediaList = None
@@ -139,6 +144,7 @@ class Usage(StrictModel):
 
 class AskResponse(StrictModel):
     model: str
+    specialist: str | None = None
     answers: dict[str, Annotated[YesNoAnswer | SingleChoiceAnswer | RatingAnswer | MultiChoiceAnswer,
                                 Field(discriminator='type')]]
     usage: Usage
@@ -210,13 +216,29 @@ def respond(request, prepared, execution, model_id=LEGACY_MODEL_ID):
     """Response body from an all-or-nothing execution; usage is the billable input."""
     answers = {q.key: answer(request, request.questions[q.key], list(q.labels), p)
                for q, p in zip(prepared, execution.probabilities)}
-    return {'model': model_id, 'answers': answers,
+    body = {'model': model_id, 'answers': answers,
             'usage': {'input_tokens': execution.billable_tokens, 'output_tokens': 0}}
+    if request.specialist:
+        body['specialist'] = request.specialist
+    return body
+
+
+def specialist_of(scorer, name):
+    """The scorer that answers for specialist `name` of a served model (the model itself when unset)."""
+    if not name:
+        return scorer
+    found = getattr(scorer, 'specialists', {}).get(name)
+    if found is None:
+        model_id = getattr(scorer, 'model_id', LEGACY_MODEL_ID)
+        known = ', '.join(sorted(getattr(scorer, 'specialists', {}))) or 'none'
+        raise ModelNotServed(f'{model_id} has no specialist {name!r} (available: {known})')
+    return found
 
 
 def ask(request: AskRequest, scorer, expected_input_tokens=None):
     from .media import decode_media, request_media
     model_id = served_model(scorer, request.model)
+    scorer = specialist_of(scorer, request.specialist)
     raw = request_media(request, scorer)
     # Encode and check capability for every question before any forward pass in a mixed request.
     prepared = prepare_ask(request)

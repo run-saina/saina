@@ -36,6 +36,7 @@ class Question(BaseModel):
 class SystemOneRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     model: str = Field(min_length=1)
+    specialist: str | None = Field(default=None, pattern=r'^[a-z][a-z0-9-]{0,31}$')
     state: str | dict[str, JsonValue] | list[JsonValue]
     images: list[str] | None = None
     audios: list[str] | None = None
