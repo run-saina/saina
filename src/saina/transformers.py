@@ -20,8 +20,10 @@ class HelmModel(PreTrainedModel):
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *args, config=None,
-                        revision=None, device='cpu', max_length=None, **kwargs):
-        from .loader import load_scorer
+                        revision=None, device='cpu', max_length=None, specialists=None, **kwargs):
+        """``specialists``: ``{checkpoint: revision}`` of domain specialists trained for this exact release;
+        select one per call with ``ask(specialist=name)``."""
+        from .loader import load_scorer, load_specialist
         if args:
             raise ValueError('Positional model arguments are not supported')
         if kwargs.get('trust_remote_code'):
@@ -30,6 +32,10 @@ class HelmModel(PreTrainedModel):
             raise ValueError('Use a single device; device_map is not supported')
         scorer = load_scorer(str(pretrained_model_name_or_path), revision=revision,
                              device=str(device), max_length=max_length)
+        scorer.specialists = {}
+        for checkpoint, specialist_revision in (specialists or {}).items():
+            special = load_specialist(scorer, str(checkpoint), specialist_revision)
+            scorer.specialists[special.specialist] = special
         return cls(config or HelmConfig(), scorer).eval()
 
     def forward(self, request):
@@ -53,6 +59,8 @@ class HelmModel(PreTrainedModel):
             if isinstance(request.get(name), (list, tuple)):
                 request[name] = [convert(v) for v in request[name]]
         self.scorer.device = str(self.device)
+        for special in getattr(self.scorer, 'specialists', {}).values():
+            special.device = self.scorer.device
         return ask(AskRequest.model_validate(request), self.scorer)
 
     def save_pretrained(self, *args, **kwargs):
