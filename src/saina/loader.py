@@ -14,6 +14,8 @@ FORMAT_PROMPTS = {2: SHARED_PROMPT, 3: MULTIMODAL_PROMPT}
 INPUTS = ('text', 'image', 'audio')
 LEGACY_MODEL_ID = 'saina-helm-0.8b'  # checkpoints from before releases named themselves
 MODEL_NAME = r'saina-helm(-[0-9]+)?(-[a-z]+)?-[0-9.]+b'
+SPECIALIST_NAME = r'[a-z][a-z0-9-]{0,31}'
+SPECIALIST_FORMATS = (1,)
 
 
 class FrozenHeadScorer:
@@ -281,7 +283,7 @@ def checkpoint_model_id(path):
     return model_id
 
 
-def load_scorer(checkpoint, revision=None, device='cpu', max_length=None):
+def staged(checkpoint, revision):
     path = Path(checkpoint)
     if not path.is_dir():
         if not revision or not re.fullmatch(r"[0-9a-f]{40}", revision):
@@ -289,6 +291,77 @@ def load_scorer(checkpoint, revision=None, device='cpu', max_length=None):
         from huggingface_hub import snapshot_download
         path = Path(snapshot_download(checkpoint, revision=revision,
             allow_patterns=['*.json', '*.safetensors', '*.txt', '*.model', '*.jinja', '*.tiktoken']))
+    return path
+
+
+def low_rank_delta(torch):
+    class LowRankDelta(torch.nn.Module):
+        """A frozen linear layer plus a specialist's low-rank delta, computed in float32 as in training."""
+        def __init__(self, base, down, up, scale):
+            super().__init__()
+            self.base, self.scale = base, scale
+            self.register_buffer('down', down.float().to(base.weight.device), persistent=False)
+            self.register_buffer('up', up.float().to(base.weight.device), persistent=False)
+
+        def forward(self, x):
+            y = self.base(x)
+            return y + (x.to(self.down.dtype) @ self.down.t() @ self.up.t()).to(y.dtype) * self.scale
+    return LowRankDelta
+
+
+def load_specialist(scorer, checkpoint, revision=None):
+    """A copy of a multimodal `scorer` that answers as one of its domain specialists.
+
+    A specialist ships low-rank weight deltas (`<module>.down`, `<module>.up`) for one exact base release. The copy
+    adds scale * up @ down to every listed module's output (kept separate from the bf16 weights so serving matches
+    training exactly) and keeps the base's frozen answer head. The base scorer is left unchanged, so one process
+    can serve the base and its specialists side by side."""
+    import copy
+    from safetensors.torch import load_file
+    torch = scorer.torch
+    path = staged(checkpoint, revision)
+    config = json.loads((path / 'specialist-config.json').read_text())
+    if config.get('saina_specialist_format') not in SPECIALIST_FORMATS:
+        raise ValueError('Unsupported specialist format; upgrade the saina package')
+    name = config.get('specialist')
+    if not isinstance(name, str) or not re.fullmatch(SPECIALIST_NAME, name):
+        raise ValueError('Invalid specialist name')
+    if not isinstance(scorer, MultimodalHeadScorer):
+        raise ValueError('Specialists need a multimodal base checkpoint')
+    if (config.get('base_model') != scorer.model_id or
+            config.get('base_model_safetensors_sha256') != getattr(scorer, 'weights_sha256', None)):
+        raise ValueError(f'Specialist {name} was trained for different base weights than {scorer.model_id}')
+    inputs = config.get('inputs')
+    if not isinstance(inputs, list) or 'text' not in inputs or set(inputs) - set(scorer.inputs):
+        raise ValueError('Invalid specialist inputs')
+    scale = config.get('scale')
+    if type(scale) not in (int, float) or not math.isfinite(scale):
+        raise ValueError('Invalid specialist scale')
+    deltas = load_file(str(path / 'specialist.safetensors'))
+    modules = config.get('modules')
+    if not isinstance(modules, list) or set(deltas) != {f'{m}.{k}' for m in modules for k in ('down', 'up')}:
+        raise ValueError('Specialist weights do not match its module list')
+    special = copy.copy(scorer)
+    special.model = copy.deepcopy(scorer.model)
+    LowRankDelta = low_rank_delta(torch)
+    for m in modules:
+        linear = special.model.get_submodule(m)
+        down, up = deltas[f'{m}.down'], deltas[f'{m}.up']
+        if (not isinstance(linear, torch.nn.Linear) or up.shape[1] != down.shape[0] or
+                (up.shape[0], down.shape[1]) != tuple(linear.weight.shape)):
+            raise ValueError('Specialist weights do not match the base model')
+        parent, _, child = m.rpartition('.')
+        setattr(special.model.get_submodule(parent), child, LowRankDelta(linear, down, up, float(scale)))
+    special.model.eval().requires_grad_(False)
+    special.inputs = tuple(i for i in scorer.inputs if i in inputs)
+    special.specialists = {}
+    special.specialist, special.specialist_revision = name, revision
+    special.specialist_description = config.get('description') if isinstance(config.get('description'), str) else None
+    return special
+
+
+def load_scorer(checkpoint, revision=None, device='cpu', max_length=None):
+    path = staged(checkpoint, revision)
     if (path / 'head-config.json').is_file():
         model_id, inputs = checkpoint_model_id(path), checkpoint_inputs(path)
         version = checkpoint_format(path)
@@ -299,5 +372,9 @@ def load_scorer(checkpoint, revision=None, device='cpu', max_length=None):
                                                                               max_length=max_length)
             scorer.inputs = inputs
         scorer.model_id, scorer.revision = model_id, revision
+        # Specialists name the exact base weights they were trained on (see load_specialist).
+        manifest = path / 'artifact-manifest.json'
+        scorer.weights_sha256 = (json.loads(manifest.read_text()).get('model.safetensors')
+                                 if manifest.is_file() else None)
         return scorer
     raise ValueError('Expected a staged Helm checkpoint with head-config.json')

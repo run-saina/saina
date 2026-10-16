@@ -21,9 +21,9 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from . import __version__
 from .errors import InputTooLong, ModelNotServed
-from .loader import load_scorer
+from .loader import load_scorer, load_specialist
 from .contract import (LEGACY_MODEL_ID, AskRequest, AskResponse, billable_ask, model_names, prepare_ask,
-                       respond as respond_ask)
+                       respond as respond_ask, specialist_of)
 from .jev import SystemOneRequest, billable_systemone, prepare_systemone, respond as respond_systemone
 from .media import (IMAGE_MAX_PIXELS, MAX_AUDIO_SECONDS, MAX_AUDIOS, MAX_IMAGES, MAX_MEDIA_BYTES, MediaError,
                     decode_media, request_media)
@@ -182,14 +182,45 @@ def parse_models(spec):
     return models
 
 
+def parse_specialists(spec):
+    """SAINA_SPECIALISTS: comma-separated `checkpoint@revision`; each attaches to the base it was trained for."""
+    out = []
+    for item in (part.strip() for part in spec.split(',')):
+        if not item:
+            continue
+        checkpoint, _, revision = item.partition('@')
+        if not checkpoint:
+            raise ValueError(f'Invalid SAINA_SPECIALISTS entry: {item!r}')
+        out.append((checkpoint, revision or None))
+    return out
+
+
+def attach_specialists(models, spec, loader=load_specialist):
+    for checkpoint, revision in parse_specialists(spec):
+        errors = []
+        for base in models:
+            try:
+                special = loader(base, checkpoint, revision)
+            except ValueError as e:
+                errors.append(str(e))
+                continue
+            base.specialists = {**getattr(base, 'specialists', {}), special.specialist: special}
+            break
+        else:
+            raise RuntimeError(f'No served model accepts specialist {checkpoint}: ' + '; '.join(errors))
+    return models
+
+
 def load_models(loader=load_scorer):
     env = os.environ.get
     device = env('SAINA_DEVICE', 'cpu')
     if env('SAINA_MODELS'):
-        return [loader(c, revision=r, device=device, max_length=m) for c, r, m in parse_models(env('SAINA_MODELS'))]
-    # Without SAINA_MAX_LENGTH the checkpoint's own context limit applies.
-    return [loader(env('SAINA_CHECKPOINT'), revision=env('SAINA_REVISION'), device=device,
-                   max_length=int(env('SAINA_MAX_LENGTH')) if env('SAINA_MAX_LENGTH') else None)]
+        models = [loader(c, revision=r, device=device, max_length=m) for c, r, m in parse_models(env('SAINA_MODELS'))]
+    else:
+        # Without SAINA_MAX_LENGTH the checkpoint's own context limit applies.
+        models = [loader(env('SAINA_CHECKPOINT'), revision=env('SAINA_REVISION'), device=device,
+                         max_length=int(env('SAINA_MAX_LENGTH')) if env('SAINA_MAX_LENGTH') else None)]
+    return attach_specialists(models, env('SAINA_SPECIALISTS', ''))
 
 
 def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
@@ -228,14 +259,22 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
             raise ApiError(503, 'inference_unavailable', 'No model is loaded', {'Retry-After': '1'}, NOT_ADMITTED)
         return [single]
 
-    def pick(name, fallback=False):
+    def pick(name, fallback=False, specialist=None):
         models = served()
-        for s in models:
-            if name != 'saina-helm' and name in model_names(model_id(s)):
-                return s
-        if name == 'saina-helm' or fallback:
-            return models[0]
-        raise ApiError(404, 'not_found', 'This endpoint serves ' + ', '.join(map(model_id, models)))
+        chosen = next((s for s in models if name != 'saina-helm' and name in model_names(model_id(s))), None)
+        if chosen is None:
+            if not (name == 'saina-helm' or fallback):
+                raise ApiError(404, 'not_found', 'This endpoint serves ' + ', '.join(map(model_id, models)))
+            chosen = models[0]
+        try:
+            return specialist_of(chosen, specialist)
+        except ModelNotServed as e:
+            raise ApiError(404, 'not_found', str(e)) from None
+
+    def specialist_listing(scorer):
+        return [{'id': name, 'model': model_id(scorer), 'revision': getattr(s, 'specialist_revision', None),
+                 'inputs': model_inputs(s), 'description': getattr(s, 'specialist_description', None)}
+                for name, s in sorted(getattr(scorer, 'specialists', {}).items())]
 
     app = FastAPI(title='Saina Helm', version=__version__, lifespan=lifespan)
     app.state.executor = executor
@@ -369,6 +408,8 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
             # Errors never carry request content.
             raise ApiError(500, 'inference_failed', 'Inference failed') from None
         body = respond(prepared, execution, model_id(model))
+        if getattr(model, 'specialist', None) and 'specialist' not in body:
+            body['specialist'] = model.specialist
         # X-Saina-Input-Tokens is the model-input length the gateway's metering check compares;
         # X-Saina-Billable-Tokens (and usage.input_tokens) is what the request is billed for.
         headers = {'X-Saina-Input-Tokens': str(execution.total_input_tokens),
@@ -396,7 +437,15 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
         if len(models) > 1:
             health['models'] = [{'model': model_id(s), 'revision': getattr(s, 'revision', None),
                                  'inputs': model_inputs(s)} for s in models]
+        specialists = [x for s in models for x in specialist_listing(s)]
+        if specialists:
+            health['specialists'] = specialists
         return health
+
+    @app.get('/v1/specialists')
+    def specialists():
+        # Domain specialists of every served model; select one with the request's `specialist` field.
+        return {'data': [x for s in served() for x in specialist_listing(s)]}
 
     @app.get('/v1/models')
     def models():
@@ -432,6 +481,7 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
                                 'instead of generating text.'),
                 'input_modalities': modalities,
                 'inputs': model_inputs(scorer),
+                'specialists': [x['id'] for x in specialist_listing(scorer)],
                 'output_modalities': [{'type': 'decisions', 'supported_parameters': {}}],
                 'capacity': [{'type': 'request', 'unit': 'request', 'per': 'minute', 'value': 300}],
                 'is_ready': True,
@@ -443,7 +493,7 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
     async def native_questions(body: AskRequest, request: Request, kind: str = Depends(caller)):
         result, headers = await serve(request, kind, prepare_ask(body), billable_ask(body),
                                       lambda prepared, execution, mid: respond_ask(body, prepared, execution, mid),
-                                      pick(body.model), body)
+                                      pick(body.model, specialist=body.specialist), body)
         return JSONResponse(AskResponse.model_validate(result).model_dump(exclude_unset=True), headers=headers)
 
     @app.post('/v1/systemone')
@@ -452,7 +502,7 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
         # System One callers send their own model labels; unknown labels reach the default model.
         result, headers = await serve(request, kind, prepare_systemone(body), billable_systemone(body),
                                       lambda prepared, execution, mid: respond_systemone(body, prepared, execution, mid),
-                                      pick(body.model, fallback=True), body)
+                                      pick(body.model, fallback=True, specialist=body.specialist), body)
         return JSONResponse(result, headers=headers)
 
     @app.delete('/v1/internal/requests/{request_id}', dependencies=[Depends(service_only)])

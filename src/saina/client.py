@@ -203,36 +203,43 @@ class SainaHelm:
     # Inference -----------------------------------------------------------------------------------------
 
     def ask(self, *, model, state, questions, mode='distribution', images=None, audios=None, idempotency_key=None,
-            **policy):
+            specialist=None, **policy):
         """Ask typed questions; policy defaults/overrides require decision mode.
 
         ``images`` (PNG, JPEG or WebP) and ``audios`` (WAV, FLAC, MP3, Ogg or WebM, at most 10 s each) are
         lists of data URLs, local paths, http(s) URLs (downloaded here), bytes, PIL images (images) or
         ``(samples, sample_rate)`` NumPy arrays (audio); every question sees all of them. They need a model
-        that reads images or audio."""
+        that reads images or audio. ``specialist`` names one of the model's domain specialists
+        (``GET /v1/specialists``) to answer instead of the model itself."""
         return self.ask_with_metadata(model=model, state=state, questions=questions, mode=mode, images=images,
-                                      audios=audios, idempotency_key=idempotency_key, **policy)[0]
+                                      audios=audios, idempotency_key=idempotency_key, specialist=specialist,
+                                      **policy)[0]
 
     def ask_with_metadata(self, *, model, state, questions, mode='distribution', images=None, audios=None,
-                          idempotency_key=None, **policy):
+                          idempotency_key=None, specialist=None, **policy):
         """Like :meth:`ask`, returning ``(result, ResponseMetadata)``."""
         if not isinstance(questions, dict) or not questions:
             raise ValueError('At least one typed question is required')
-        payload = dict(model=model, state=state, **_media(images, audios), questions=questions, mode=mode, **policy)
+        payload = dict(model=model, **({'specialist': specialist} if specialist else {}), state=state,
+                       **_media(images, audios), questions=questions, mode=mode, **policy)
         result, meta = self._post('/v1/ask', payload, idempotency_key)
         _validate_answers(payload, result)
         return result, meta
 
-    def system_one(self, *, model, state, questions, images=None, audios=None, idempotency_key=None):
+    def system_one(self, *, model, state, questions, images=None, audios=None, idempotency_key=None,
+                   specialist=None):
         """Call ``POST /v1/systemone`` (System One wire format: ``noul``, ``choice``, ``score``); ``images`` and
         ``audios`` as in :meth:`ask`."""
         return self.system_one_with_metadata(model=model, state=state, questions=questions, images=images,
-                                             audios=audios, idempotency_key=idempotency_key)[0]
+                                             audios=audios, idempotency_key=idempotency_key,
+                                             specialist=specialist)[0]
 
-    def system_one_with_metadata(self, *, model, state, questions, images=None, audios=None, idempotency_key=None):
+    def system_one_with_metadata(self, *, model, state, questions, images=None, audios=None, idempotency_key=None,
+                                 specialist=None):
         if not isinstance(questions, dict) or not questions:
             raise ValueError('At least one question is required')
-        payload = dict(model=model, state=state, **_media(images, audios), questions=questions)
+        payload = dict(model=model, **({'specialist': specialist} if specialist else {}), state=state,
+                       **_media(images, audios), questions=questions)
         result, meta = self._post('/v1/systemone', payload, idempotency_key)
         if (not isinstance(result, dict) or not isinstance(result.get('model'), str) or
                 not isinstance(result.get('answers'), dict) or set(result['answers']) != set(questions)):
