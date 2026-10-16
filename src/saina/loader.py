@@ -309,6 +309,22 @@ def low_rank_delta(torch):
     return LowRankDelta
 
 
+def standalone_specialist(scorer, path, revision):
+    """A checkpoint with a specialist merged into its weights (config.json `saina_specialist`) answers only as that
+    specialist of its model: `{"model": <model>, "specialist": <name>}`. It needs no base checkpoint, so the
+    specialist and its model are deployed independently."""
+    package = json.loads((path / 'config.json').read_text()) if (path / 'config.json').is_file() else {}
+    name = package.get('saina_specialist')
+    if name is None:
+        return
+    if not isinstance(name, str) or not re.fullmatch(SPECIALIST_NAME, name):
+        raise ValueError('Invalid saina_specialist name in checkpoint config')
+    description = package.get('saina_specialist_description')
+    scorer.specialist, scorer.specialist_revision = name, revision
+    scorer.specialist_description = description if isinstance(description, str) else None
+    scorer.specialists, scorer.specialist_only = {name: scorer}, True
+
+
 def load_specialist(scorer, checkpoint, revision=None):
     """A copy of a multimodal `scorer` that answers as one of its domain specialists.
 
@@ -326,7 +342,7 @@ def load_specialist(scorer, checkpoint, revision=None):
     name = config.get('specialist')
     if not isinstance(name, str) or not re.fullmatch(SPECIALIST_NAME, name):
         raise ValueError('Invalid specialist name')
-    if not isinstance(scorer, MultimodalHeadScorer):
+    if not isinstance(scorer, MultimodalHeadScorer) or getattr(scorer, 'specialist_only', False):
         raise ValueError('Specialists need a multimodal base checkpoint')
     if (config.get('base_model') != scorer.model_id or
             config.get('base_model_safetensors_sha256') != getattr(scorer, 'weights_sha256', None)):
@@ -376,5 +392,6 @@ def load_scorer(checkpoint, revision=None, device='cpu', max_length=None):
         manifest = path / 'artifact-manifest.json'
         scorer.weights_sha256 = (json.loads(manifest.read_text()).get('model.safetensors')
                                  if manifest.is_file() else None)
+        standalone_specialist(scorer, path, revision)
         return scorer
     raise ValueError('Expected a staged Helm checkpoint with head-config.json')

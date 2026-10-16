@@ -211,6 +211,28 @@ def attach_specialists(models, spec, loader=load_specialist):
     return models
 
 
+def gather_specialists(models):
+    """Standalone specialists (checkpoints with a specialist merged in) join their model: a served base of the
+    same release, or the first standalone specialist of it, so each release is listed once."""
+    kept = []
+    for m in models:
+        if getattr(m, 'specialist_only', False):
+            home = next((k for k in kept if model_id(k) == model_id(m)), None)
+            if home is not None:
+                if m.specialist in getattr(home, 'specialists', {}):
+                    raise RuntimeError(f'Specialist {m.specialist} of {model_id(m)} is listed twice')
+                home.specialists = {**getattr(home, 'specialists', {}), m.specialist: m}
+                continue
+        else:
+            home = next((k for k in kept if model_id(k) == model_id(m) and getattr(k, 'specialist_only', False)), None)
+            if home is not None:  # a base listed after its standalone specialists takes them over
+                m.specialists = {**getattr(m, 'specialists', {}), **home.specialists}
+                kept[kept.index(home)] = m
+                continue
+        kept.append(m)
+    return kept
+
+
 def load_models(loader=load_scorer):
     env = os.environ.get
     device = env('SAINA_DEVICE', 'cpu')
@@ -220,7 +242,7 @@ def load_models(loader=load_scorer):
         # Without SAINA_MAX_LENGTH the checkpoint's own context limit applies.
         models = [loader(env('SAINA_CHECKPOINT'), revision=env('SAINA_REVISION'), device=device,
                          max_length=int(env('SAINA_MAX_LENGTH')) if env('SAINA_MAX_LENGTH') else None)]
-    return attach_specialists(models, env('SAINA_SPECIALISTS', ''))
+    return attach_specialists(gather_specialists(models), env('SAINA_SPECIALISTS', ''))
 
 
 def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,

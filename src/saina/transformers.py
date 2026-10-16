@@ -32,7 +32,7 @@ class HelmModel(PreTrainedModel):
             raise ValueError('Use a single device; device_map is not supported')
         scorer = load_scorer(str(pretrained_model_name_or_path), revision=revision,
                              device=str(device), max_length=max_length)
-        scorer.specialists = {}
+        scorer.specialists = dict(getattr(scorer, 'specialists', None) or {})  # a merged checkpoint lists itself
         for checkpoint, specialist_revision in (specialists or {}).items():
             special = load_specialist(scorer, str(checkpoint), specialist_revision)
             scorer.specialists[special.specialist] = special

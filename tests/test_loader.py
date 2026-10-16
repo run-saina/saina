@@ -128,6 +128,27 @@ class LoaderTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         checkpoint_model_id(Path(d))
 
+    def test_merged_specialist_answers_only_as_itself(self):
+        from types import SimpleNamespace
+        from saina.contract import ModelNotServed, specialist_of
+        from saina.loader import standalone_specialist
+        with tempfile.TemporaryDirectory() as d:
+            plain = SimpleNamespace(model_id='saina-helm-2-omni-0.8b')
+            write_checkpoint(Path(d), package={'saina_model': 'saina-helm-2-omni-0.8b'})
+            standalone_specialist(plain, Path(d), 'b' * 40)
+            self.assertFalse(hasattr(plain, 'specialist'))
+            write_checkpoint(Path(d), package={'saina_model': 'saina-helm-2-omni-0.8b', 'saina_specialist': 'mechanical',
+                                               'saina_specialist_description': 'Machines'})
+            s = SimpleNamespace(model_id='saina-helm-2-omni-0.8b')
+            standalone_specialist(s, Path(d), 'b' * 40)
+            self.assertEqual((s.specialist, s.specialist_revision, s.specialist_description), ('mechanical', 'b' * 40, 'Machines'))
+            self.assertIs(specialist_of(s, 'mechanical'), s)
+            with self.assertRaises(ModelNotServed):
+                specialist_of(s, None)
+            write_checkpoint(Path(d), package={'saina_model': 'saina-helm-2-omni-0.8b', 'saina_specialist': '../x'})
+            with self.assertRaises(ValueError):
+                standalone_specialist(SimpleNamespace(), Path(d), None)
+
     def test_shared_checkpoint_requires_merged_weights(self):
         from saina.loader import SharedHeadScorer
         with tempfile.TemporaryDirectory() as d:
