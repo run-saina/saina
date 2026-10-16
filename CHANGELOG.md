@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.0
+
+- **Domain specialists.** A specialist is a model trained further for one domain, shipped as a small set of
+  weights for one exact base release (checked against the base's `model.safetensors` hash). Select one per request
+  with `"specialist": "<name>"` on `/v1/ask` and `/v1/systemone`; responses then carry `specialist` beside `model`.
+  Without the field the model answers as before. `GET /v1/specialists` lists them; `/v1/models` lists each model's
+  `specialists` and `/healthz` includes them. An unknown specialist is a 404.
+- Servers load specialists with `SAINA_SPECIALISTS=checkpoint@revision,...`; each attaches to the served model it
+  was trained for. Local use: `HelmModel.from_pretrained(..., specialists={checkpoint: revision})` and
+  `helm.ask(specialist=...)`, or `saina.loader.load_specialist`. The clients take `specialist=`.
+- First specialist: `mechanical` for Saina Helm 2 Omni 0.8B
+  ([run-saina/saina-helm-2-omni-0.8b-mechanical](https://huggingface.co/run-saina/saina-helm-2-omni-0.8b-mechanical)):
+  machine condition and likely fault from a recording.
+
 ## 0.4.0
 
 - **Saina Helm 2 Omni 0.8B** (`saina-helm-2-omni-0.8b`, [run-saina/saina-helm-2-omni-0.8b](https://huggingface.co/run-saina/saina-helm-2-omni-0.8b)):
