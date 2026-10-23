@@ -22,6 +22,26 @@ pip install 'saina[media]'         # decoding images and audio (server, local in
 
 From a checkout, use `pip install .` or `pip install '.[local,server]'`.
 
+### Offline artifact diagnostics (unreleased)
+
+From this checkout, check an already downloaded bundle without loading a model:
+
+```sh
+PYTHONPATH=src python3 -m saina doctor --checkpoint /path/to/checkpoint --json
+```
+
+After installing this checkout, the same command is available as `saina doctor`.
+It checks every file in `artifact-manifest.json` and requires the trained
+`head.safetensors` and `head-config.json` to be listed. Missing manifests, omitted
+required files and checksum mismatches exit with status 1. Use `--require FILE`
+repeatedly for additional backend assets. For an experimental GGUF bundle, pass
+`--manifest gguf-manifest.json`.
+
+This command checks consistency against the supplied manifest only. It does not
+authenticate a release, validate tensor or tokenizer compatibility, verify that a
+runner can start, or establish model readiness. It performs no downloads or repairs.
+For guided launch and the browser interface, see Local playground below.
+
 ```python
 from saina import Saina
 
@@ -326,3 +346,58 @@ No training datasets, private history, model weights, or credentials are include
 ## Developer contact
 
 For integration support and developer enquiries, email [dev@saina.run](mailto:dev@saina.run).
+
+
+### Local playground (unreleased)
+
+```sh
+saina playground
+```
+
+Opens the shared browser UI before loading a model. Select a downloaded model or
+choose Download in the UI. Download size, verification and loading status are
+shown there. Cached models work offline. Apple Silicon defaults to the original
+Helm FP16 MLX backend; native CPU offers Helm, Helm 2, Helm 2 Omni and Helm 2 Routing.
+Each pinned release is hash-verified and runs a startup check before inference.
+
+```sh
+saina serve helm     # Inference API only; download missing pinned files
+saina serve          # Use the sole cached model, otherwise show a terminal picker
+saina doctor helm    # Verify artifacts without loading weights
+saina doctor helm --json
+saina --version
+```
+
+Without a model key, ambiguous selection in a noninteractive shell fails with
+available keys. Playground takes no model key: selection and download happen in
+its UI. There is no `local` alias or plan/download/offline flag.
+
+Install `saina[server,local]` for native CPU or `saina[server,mlx]` on Apple Silicon.
+From a source checkout use `pip install -e '.[server,local]'`, substituting the
+backend extra as appropriate. GGUF uses the experimental `server,gguf` extras
+and the existing original-Helm custom runner with separate head:
+
+```sh
+saina playground --port 8766 --no-browser
+saina serve --backend native --checkpoint /path/to/native-bundle
+saina serve --backend mlx --checkpoint /path/to/helm-mlx
+saina serve --backend gguf --checkpoint /path/to/gguf-bundle --runner /path/to/helm-hidden
+```
+
+Remote custom checkpoints require `--revision` with a full immutable Hub commit.
+The default port is 8765. Playground's `--no-browser` prints the connection URL.
+Serve prints the API URL and bearer token. No hosted inference fallback occurs.
+The browser connection token stays in memory: reopen the printed URL after a
+refresh. Export data before closing or switching models; drafts/results are in memory.
+
+Both playgrounds share CSV/JSONL import, nested field mapping, preview, question
+catalog references, optional evaluation, sequential execution, cancellation and
+partial export. Hosted runs retain quote and idempotency controls.
+
+The SDK packages the exact hosted UI assets. Refresh them from the sibling
+website with `node build-console.mjs` and `node build-local-ui.mjs`; playground's
+`--ui-dir` selects another verified build. File hashes and UI/API compatibility
+are checked before loading models.
+
+Exit codes: 0 success, 1 setup/integrity/runtime failure, 2 invalid arguments,
+130 cancelled. See [validation](docs/local-validation.md) and [Mac instructions](docs/mac-test.md).

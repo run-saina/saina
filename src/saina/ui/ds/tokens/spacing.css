@@ -1,0 +1,16 @@
+:root{
+--space-0:0;--space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:20px;--space-6:24px;--space-8:32px;--space-10:40px;--space-12:48px;--space-16:64px;--space-24:96px;
+/* Corners: the mark and favicon tiles are square. UI follows. */
+--radius-0:0;--radius-1:2px;--radius-full:999px;
+--radius-control:var(--radius-0);--radius-card:var(--radius-0);
+--border-width:1px;--border-width-strong:1.5px;
+/* Elevation: flat. Only overlays get a shadow, and it is soft and neutral. */
+--shadow-none:none;--shadow-overlay:0 1px 0 rgba(20,20,20,.04),0 12px 32px -8px rgba(20,20,20,.18);
+--control-h-sm:28px;--control-h-md:36px;--control-h-lg:44px;
+--duration-fast:90ms;
+--duration-base:160ms;
+--ease-standard:cubic-bezier(.2,0,0,1);
+--content-max:1120px;
+/* Clear space rule: 1 X (wordmark x-height) on every side. Min lockup 120px wide; primary mark never below 24px. */
+--logo-min-width:120px;--mark-min-size:24px;
+}

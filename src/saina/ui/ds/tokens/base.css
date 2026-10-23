@@ -1,0 +1,6 @@
+html{-webkit-font-smoothing:antialiased;font-optical-sizing:auto}
+body{margin:0;background:var(--surface-page);color:var(--text-primary);font:var(--type-body)}
+a{color:var(--text-primary);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px}
+a:hover{color:var(--saina-black);text-decoration-thickness:2px}
+code,pre,kbd{font-family:var(--font-mono)}
+::selection{background:var(--saina-ink);color:var(--saina-reverse-ink)}

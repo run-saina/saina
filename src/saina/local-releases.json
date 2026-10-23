@@ -1,0 +1,232 @@
+{
+  "helm": {
+    "native": {
+      "repo": "run-saina/saina-helm-0.8b",
+      "revision": "e82055b348d02bb43552ccba88eda24835ba6baf",
+      "files": {
+        "chat_template.jinja": {
+          "size": 7755,
+          "sha256": "273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80"
+        },
+        "config.json": {
+          "size": 2709,
+          "sha256": "22b019fc8d39cd96a0f6bd28587be8cea118b9c02f1bff0a8e6cbd56c85560cd"
+        },
+        "generation_config.json": {
+          "size": 116,
+          "sha256": "d0bb1d295ae3e46bb02d6d1a4dc59d689ec822d7479a32835f6945db85c3512a"
+        },
+        "head-config.json": {
+          "size": 12379,
+          "sha256": "f7e4cc9c5db4cdf8ccc61598087971fc9115b5931dafe9754c1e3c5d55add765"
+        },
+        "head.safetensors": {
+          "size": 2408528,
+          "sha256": "79314eabc10fcba925d22cf31efa3f087458d814ad7642891b0dbcfe3817debd"
+        },
+        "model.safetensors": {
+          "size": 1706030528,
+          "sha256": "2938ed35355228c238a22c98021ba99879a84543a8d7054a6abab17734309ebb"
+        },
+        "tokenizer.json": {
+          "size": 19989339,
+          "sha256": "a5cd9732badce41de57e6efce8302930ded1c1188c5f81feb2bd6c24c4a1941f"
+        },
+        "tokenizer_config.json": {
+          "size": 1466,
+          "sha256": "f6fdf337c2c5f4ed8190168a772c83f5c9364d225abae63223fde372e3cfb71f"
+        }
+      }
+    },
+    "mlx": {
+      "repo": "run-saina/saina-helm-0.8b-MLX",
+      "revision": "c1c92381baa9dc0e831a94214313e3e3c44e3348",
+      "files": {
+        "chat_template.jinja": {
+          "size": 7755,
+          "sha256": "273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80"
+        },
+        "config.json": {
+          "size": 2568,
+          "sha256": "df9d69303e498f0da64004d490ccdffbdd65056d30395763b7c31ca4be526aa8"
+        },
+        "generation_config.json": {
+          "size": 116,
+          "sha256": "d0bb1d295ae3e46bb02d6d1a4dc59d689ec822d7479a32835f6945db85c3512a"
+        },
+        "head-config.json": {
+          "size": 12379,
+          "sha256": "f7e4cc9c5db4cdf8ccc61598087971fc9115b5931dafe9754c1e3c5d55add765"
+        },
+        "model.safetensors": {
+          "size": 2013386588,
+          "sha256": "ac9a9755ad79bb965b408ae44a889242f2cf1e3af2f6c863943e30bf428479f2"
+        },
+        "model.safetensors.index.json": {
+          "size": 28086,
+          "sha256": "2aacfbaaf76ceec63c1714a2201537c31ea1305f9655ac30ab6ae07b80e77df4"
+        },
+        "tokenizer.json": {
+          "size": 19989339,
+          "sha256": "a5cd9732badce41de57e6efce8302930ded1c1188c5f81feb2bd6c24c4a1941f"
+        },
+        "tokenizer_config.json": {
+          "size": 1502,
+          "sha256": "4d2fc7899270dc76b57a7aa1d5ec3234e6a25934c6e2aea6166f989f1d453892"
+        }
+      }
+    }
+  },
+  "helm2": {
+    "native": {
+      "repo": "run-saina/saina-helm-2-0.8b",
+      "revision": "a00e9cda8c5f26d5d403adf9440128d7e85e4251",
+      "files": {
+        "artifact-manifest.json": {
+          "size": 1002,
+          "sha256": "97f814dd1d3f71d2c605f9bd146b4933c0730adf4bb3d7902c5e542c61e381e9"
+        },
+        "chat_template.jinja": {
+          "size": 7755,
+          "sha256": "273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80"
+        },
+        "config.json": {
+          "size": 2909,
+          "sha256": "14a0b3157aad3e29fabaa502f21192430cf28f3085ff7955af22f4f2b6fc14b8"
+        },
+        "experts.safetensors": {
+          "size": 9085440,
+          "sha256": "b3ebd03846044f4b281691617a21a6b6c3bbb78e938f86fc2217b7730d9582ab"
+        },
+        "generation_config.json": {
+          "size": 116,
+          "sha256": "d0bb1d295ae3e46bb02d6d1a4dc59d689ec822d7479a32835f6945db85c3512a"
+        },
+        "head-config.json": {
+          "size": 12697,
+          "sha256": "ca64b545381131ccf1fd8df0ff4dc51cca6ab2c8427b35d3de9b2f421ea7a37b"
+        },
+        "head.safetensors": {
+          "size": 2408560,
+          "sha256": "846df3fe44256a54a61557634992d8cefbfe47bb773a87e9948a8aeecdcacd93"
+        },
+        "merge-provenance.json": {
+          "size": 627,
+          "sha256": "1c5dbc7a908e8cf3961b4a3fe3c849ab214f1b368ac5b55e1940218bfb1abdcf"
+        },
+        "model.safetensors": {
+          "size": 1706030528,
+          "sha256": "e9205b34700a0e9c536cf3e475141c2c31e9f657b4a982e779718e03c7cca7ed"
+        },
+        "tokenizer.json": {
+          "size": 19989339,
+          "sha256": "a5cd9732badce41de57e6efce8302930ded1c1188c5f81feb2bd6c24c4a1941f"
+        },
+        "tokenizer_config.json": {
+          "size": 1465,
+          "sha256": "54c84a6b3f5b751ce34e760fcc75521f2f5092904fbc4380d54aa8910b416fbb"
+        }
+      }
+    }
+  },
+  "helm2-omni": {
+    "native": {
+      "repo": "run-saina/saina-helm-2-omni-0.8b",
+      "revision": "d7ee0a54214d4acaaddd6e8225d8f92b40795b33",
+      "files": {
+        "artifact-manifest.json": {
+          "size": 1185,
+          "sha256": "035d8d4d840ebe6e8591f5a721a0a09c8fb238aa502e9b0beca7a5250e78e9ef"
+        },
+        "chat_template.jinja": {
+          "size": 7755,
+          "sha256": "273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80"
+        },
+        "config.json": {
+          "size": 2984,
+          "sha256": "35d867ec7f16fed40b8008da3d69c5fc76a24c63a185a39b8406d04419f04ecb"
+        },
+        "experts.safetensors": {
+          "size": 9085440,
+          "sha256": "aa24879b2b1e92ca4e9ae1b56d64c46326c68d1546761b8d807defcbbdee619c"
+        },
+        "generation_config.json": {
+          "size": 116,
+          "sha256": "d0bb1d295ae3e46bb02d6d1a4dc59d689ec822d7479a32835f6945db85c3512a"
+        },
+        "head-config.json": {
+          "size": 13073,
+          "sha256": "5fd328220c8484be0838350ac030d0918c539a7b12defeaa6055848f3a4728a2"
+        },
+        "head.safetensors": {
+          "size": 2408560,
+          "sha256": "a37ab1fe888338ab4b4db59a427b65ac2bdcd0dbe44507af14a14d2d1d664c26"
+        },
+        "merge-provenance.json": {
+          "size": 718,
+          "sha256": "4e6d8c32f59c31e4d06bc9610301fee835a12f0cb7de94488defa72dd122352d"
+        },
+        "model.safetensors": {
+          "size": 1706030528,
+          "sha256": "015f71c53df27f8c97ed94b242504dcf1e96a1583c46987fc3ac7f9198f11739"
+        },
+        "preprocessor_config.json": {
+          "size": 443,
+          "sha256": "3a159dfec9978a186a72ba085e0ad6a050f3968d8b364218d7bd13f5c89381f2"
+        },
+        "tokenizer.json": {
+          "size": 12807982,
+          "sha256": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42"
+        },
+        "tokenizer_config.json": {
+          "size": 16709,
+          "sha256": "49e2b6e395f959f077f1e992b338919c0d4a9732fc6e613995e06557f843500c"
+        }
+      }
+    }
+  },
+  "helm2-routing": {
+    "native": {
+      "repo": "run-saina/saina-helm-2-routing-0.8b",
+      "revision": "6c99c8cdd87d0cfd2ecfb05650bb25b803b863fd",
+      "files": {
+        "chat_template.jinja": {
+          "size": 7755,
+          "sha256": "273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80"
+        },
+        "config.json": {
+          "size": 2919,
+          "sha256": "5f1a6d13754d207b24d64f83cfc7edd0e5d798cbbb53af09e02a7e322defcd94"
+        },
+        "experts.safetensors": {
+          "size": 9085408,
+          "sha256": "b8485c8d580e05e4b56f1c23f15f28870d63f158dff1d267ff0b7a1c0889b35d"
+        },
+        "generation_config.json": {
+          "size": 116,
+          "sha256": "d0bb1d295ae3e46bb02d6d1a4dc59d689ec822d7479a32835f6945db85c3512a"
+        },
+        "head-config.json": {
+          "size": 12657,
+          "sha256": "9f73f748c825150f35f797246fb9e7183e82fecd2626df5d68286841add7d6f2"
+        },
+        "head.safetensors": {
+          "size": 2408528,
+          "sha256": "da2883f7cbf74259a67e817271f48e0da2c117b64a00f5ed6075eb85d49539bb"
+        },
+        "model.safetensors": {
+          "size": 1706030528,
+          "sha256": "0ab674fe62cc0aab606c33398cd0f253fdf9d45a6c849f475bd45120411c7769"
+        },
+        "tokenizer.json": {
+          "size": 19989339,
+          "sha256": "a5cd9732badce41de57e6efce8302930ded1c1188c5f81feb2bd6c24c4a1941f"
+        },
+        "tokenizer_config.json": {
+          "size": 1465,
+          "sha256": "54c84a6b3f5b751ce34e760fcc75521f2f5092904fbc4380d54aa8910b416fbb"
+        }
+      }
+    }
+  }
+}

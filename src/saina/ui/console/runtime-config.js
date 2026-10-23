@@ -1,0 +1,1 @@
+window.SainaRuntime = {mode: 'hosted'};
