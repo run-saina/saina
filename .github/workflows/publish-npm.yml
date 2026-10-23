@@ -1,0 +1,55 @@
+# Publish @run-saina/sdk to npm with Trusted Publishing (no stored token). "stage" runs the contract tests and stages
+# clients/javascript for two-factor approval on npm; "verify" checks the approved version is live. The npm package
+# trusts this repository and this workflow file. The JavaScript client is versioned separately from the v* PyPI tags.
+name: publish-npm
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Stage a release, or verify it after approval on npm
+        type: choice
+        options: [stage, verify]
+        default: stage
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+jobs:
+  contracts:
+    if: github.ref == 'refs/heads/main' && inputs.operation == 'stage'
+    uses: ./.github/workflows/contracts.yml
+  stage:
+    needs: contracts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: clients/javascript
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: https://registry.npmjs.org
+      - run: npm install --global npm@11.21.0
+      - name: Version is not already on npm
+        run: test -z "$(npm view "$(node -p "require('./package.json').name")@$(node -p "require('./package.json').version")" version)"
+      - name: Stage release for npm approval
+        run: npm stage publish --provenance --access public
+  verify:
+    if: github.ref == 'refs/heads/main' && inputs.operation == 'verify'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/javascript
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Approved version is live
+        run: test "$(npm view "$(node -p "require('./package.json').name")" version)" = "$(node -p "require('./package.json').version")"
