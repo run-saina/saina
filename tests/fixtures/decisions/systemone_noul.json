@@ -1,0 +1,29 @@
+{
+ "request": {
+  "model": "saina-helm",
+  "state": "I was charged twice for my order and need the extra payment back today.",
+  "questions": {
+   "billing": {
+    "type": "noul",
+    "instructions": "Is this about billing?"
+   }
+  }
+ },
+ "response": {
+  "model": "saina-helm-2-0.8b",
+  "answers": {
+   "billing": {
+    "type": "noul",
+    "noul": 0.5555555555555556
+   }
+  },
+  "usage": {
+   "input_tokens": 18,
+   "output_tokens": 0
+  }
+ },
+ "headers": {
+  "x-saina-billable-tokens": "18",
+  "x-saina-input-tokens": "40"
+ }
+}
