@@ -3,8 +3,8 @@
 Saina's HTTP SDK, shared decision contract, and optional Helm local inference.
 Saina is operated by **Rama Labs Inc.** Website: https://saina.run.
 
-The current model is not cleared for commercial distribution.
-The Apache-2.0 code license does not grant rights to third-party weights or data.
+The Helm weights are released under Apache-2.0, including for commercial use.
+Their training data was limited to permissively licensed sources.
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/run-saina/saina/blob/main/examples/saina_colab.ipynb)
 Models: [Helm 2 0.8B](https://huggingface.co/run-saina/saina-helm-2-0.8b) (current) and the original
