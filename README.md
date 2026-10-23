@@ -197,7 +197,7 @@ CPU operation is supported by the loader but is not an optimized ONNX release.
 
 Source: `clients/javascript`; registry package: `@run-saina/sdk`.
 Exports `Saina` and `SainaError`, retaining `SainaHelm` aliases for compatibility. Same idempotency, retry,
-error and metadata API (`askWithMetadata`, `systemOne`, `balance`, `usage`, `requests`); credits are `BigInt`.
+error and metadata API (`askWithMetadata`, `systemOne`, `decisions`, `balance`, `usage`, `requests`); credits are `BigInt`.
 `images` and `audios` take data URLs, http(s) URLs, `Blob`/`File` objects, `ArrayBuffer`s or typed arrays
 (`Buffer`); the client sends them as data URLs.
 
@@ -214,6 +214,33 @@ Native typed requests use `/v1/ask`. The `saina.contract` module owns their sche
 `/v1/systemone` accepts the System One wire format (`noul`, `choice`, `score`) used by Jev
 clients and OpenRouter's Decisions API; `saina.jev` holds that adapter. `GET /v1/models` lists
 the served models in OpenRouter's provider format, `GET /healthz` reports the pinned revisions and queue state, and `GET /livez` reports process liveness.
+
+`POST /v1/decisions` (also `/api/v1/decisions`) takes either a System One body (`state` plus a `questions`
+object, answered as on `/v1/systemone`) or the OpenAI Decisions request shape (`input` plus a `questions` array of
+`predicate`, `choice` and `score`), told apart by the body; `saina.decisions` holds the translation. An OpenAI
+request is translated to the native `/v1/ask` request, so it is scored and billed exactly as that request, and the
+answers come back in the shape the official OpenAI SDKs read. Model names are exact on this route (`gpt-6-luna` or
+`jev-1.14` is a 404, never the default model). Point an OpenAI client at your server's `/v1`:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key=SAINA_API_KEY)
+decision = client.decisions.create(model="saina-helm", input="I was charged twice for my order.", questions=[
+    {"type": "choice", "name": "team", "instructions": "Which team?",
+     "choices": [{"value": "billing"}, {"value": "technical"}, {"value": "other"}]}])
+```
+
+or use `Saina.decisions(model=..., input=..., questions=[...])` (Python) and `decisions({...})` (JavaScript).
+Saina's decision policy is an extension (`mode="decision"`, `threshold`, `min_margin`; `extra_body` in the OpenAI
+SDKs): an answer it does not accept becomes a billed `refusal` entry with `reason` and the distribution. Base64
+`input_image` parts are read as `images` by models that read images; image URLs, images in question instructions
+and images sent to a text-only model are refused with a 400 before anything runs. `multi_choice` stays on `/v1/ask`.
+See the [hosted API docs](https://saina.run/api/docs/#decisions) for the full mapping. `scripts/acceptance/run.sh`
+checks pinned official OpenAI and TypeSafe clients against a local server with mocked inference.
+
+Request bodies may be compressed with `Content-Encoding: gzip` or `zstd` (the TypeSafe SDKs compress bodies of 1 KiB
+or more by default); at most `SAINA_MAX_DECODED_BODY_BYTES` (default 64 MiB) are decoded.
 
 One server can serve several releases: set `SAINA_MODELS` to comma-separated
 `checkpoint@revision[:max_length]` entries instead of `SAINA_CHECKPOINT`/`SAINA_REVISION`. The first is the

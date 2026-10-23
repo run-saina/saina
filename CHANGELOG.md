@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.7.0 (unreleased)
+
+- **`POST /v1/decisions`** (and the alias `/api/v1/decisions`) accepts two request shapes, told apart by the body:
+  System One bodies (`state` plus a `questions` object, as on `/v1/systemone`) and OpenAI Decisions bodies
+  (`input` plus a `questions` array of `predicate`, `choice` and `score` questions, as sent by the official OpenAI
+  SDKs' `client.decisions.create`). OpenAI requests are translated to the native `/v1/ask` request, so they are
+  prepared, scored and billed exactly as the same native request; answers come back in request order in the
+  OpenAI response shape. A body that matches both shapes or neither is a 400; `X-Saina-Dialect: openai|systemone`
+  may confirm the shape and is a 400 when it disagrees. Responses carry `X-Saina-Dialect`.
+- On `/v1/decisions` model names are exact: a name this server does not serve (such as `gpt-6-luna` or `jev-1.14`) is
+  a 404, never another model. `/v1/systemone` is unchanged and still answers unknown System One labels with the
+  default model.
+- OpenAI dialect details: Saina's decision policy (`mode: "decision"`, `threshold`, `min_margin`) is accepted as an
+  extension; answers it does not accept become `refusal` entries that keep `reason` and the distribution, and are
+  billed. Base64 `input_image` parts are read as native `images` by models that read images; image URLs,
+  images inside question instructions, a `detail` other than `auto`, and images sent to a text-only model are
+  refused with a 400 naming the part. Sampling parameters (`temperature`, `top_p`, `seed`, ...) are refused.
+  `prompt_cache_key`, `prompt_cache_options`, `safety_identifier` and `metadata` are accepted and ignored (there is no
+  prompt cache; usage reports zero cached tokens). `multi_choice` stays native-only.
+- Request bodies compressed with `Content-Encoding: gzip` or `zstd` are decoded (at most
+  `SAINA_MAX_DECODED_BODY_BYTES`, default 64 MiB). The official TypeSafe SDKs zstd-compress bodies of 1 KiB or more
+  by default; such requests to `/v1/systemone` used to fail with 400. The `server` extra adds `backports-zstd` on
+  Python before 3.14.
+- Clients: `Saina.decisions()` (Python) and `decisions()` (JavaScript, `@run-saina/sdk` 0.4.0).
+- `scripts/acceptance/` checks pinned official OpenAI and TypeSafe SDKs against a local server with mocked inference.
+
 ## 0.6.1
 
 - Documentation: the README now states the Helm weights licence (Apache-2.0, including commercial use). No code changes.
