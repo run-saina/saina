@@ -18,8 +18,8 @@ Before each release:
 4. Confirm examples contain invented text, not private training/evaluation records.
 5. Publish only to the intended namespace and tag, with explicit release approval.
 
-Model revisions are a separate release. A successful code/package audit does not
-clear the weights or their training data for commercial distribution.
+Model revisions are a separate release with their own licence review of the
+weights and training data; a code/package audit does not cover them.
 
 If a credential leaks, revoke/rotate it immediately. Removing the file or rewriting
 history alone cannot make a disclosed credential secret again.

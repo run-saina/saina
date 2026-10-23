@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+- Documentation: the README now states the Helm weights licence (Apache-2.0, including commercial use). No code changes.
+
 ## 0.6.0
 
 - **Standalone specialists.** A checkpoint can carry a specialist merged into its weights: its `config.json` names
