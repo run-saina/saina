@@ -1,26 +1,46 @@
-# Publish @run-saina/sdk to npm with Trusted Publishing (no stored token). "stage" runs the contract tests and stages
-# clients/javascript for two-factor approval on npm; "verify" checks the approved version is live. The npm package
-# trusts this repository and this workflow file. The JavaScript client is versioned separately from the v* PyPI tags.
+# Publish @run-saina/sdk to npm with Trusted Publishing (no stored token). A push to main that changes
+# clients/javascript/package.json runs the contract tests and publishes the new version when it is not on npm yet.
+# The npm package trusts this repository and this workflow file. The JavaScript client is versioned separately from
+# the v* PyPI tags.
 name: publish-npm
 on:
+  push:
+    branches: [main]
+    paths: [clients/javascript/package.json]
   workflow_dispatch:
-    inputs:
-      operation:
-        description: Stage a release, or verify it after approval on npm
-        type: choice
-        options: [stage, verify]
-        default: stage
-        required: true
 permissions:
   contents: read
 concurrency:
   group: npm-publish
   cancel-in-progress: false
 jobs:
+  version:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.check.outputs.publish }}
+    defaults:
+      run:
+        working-directory: clients/javascript
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Skip when this version is already on npm
+        id: check
+        run: |
+          if [ -n "$(npm view "$(node -p "require('./package.json').name")@$(node -p "require('./package.json').version")" version)" ]; then
+            echo "Version already published, nothing to do"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
   contracts:
-    if: github.ref == 'refs/heads/main' && inputs.operation == 'stage'
+    needs: version
+    if: needs.version.outputs.publish == 'true'
     uses: ./.github/workflows/contracts.yml
-  stage:
+  publish:
     needs: contracts
     runs-on: ubuntu-latest
     permissions:
@@ -36,20 +56,4 @@ jobs:
           node-version: '22'
           registry-url: https://registry.npmjs.org
       - run: npm install --global npm@11.21.0
-      - name: Version is not already on npm
-        run: test -z "$(npm view "$(node -p "require('./package.json').name")@$(node -p "require('./package.json').version")" version)"
-      - name: Stage release for npm approval
-        run: npm stage publish --provenance --access public
-  verify:
-    if: github.ref == 'refs/heads/main' && inputs.operation == 'verify'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: clients/javascript
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Approved version is live
-        run: test "$(npm view "$(node -p "require('./package.json').name")" version)" = "$(node -p "require('./package.json').version")"
+      - run: npm publish --provenance --access public
