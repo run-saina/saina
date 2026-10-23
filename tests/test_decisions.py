@@ -158,9 +158,21 @@ class TranslateTests(unittest.TestCase):
         self.assertEqual(translate(body).native['state'], [
             {'role': 'developer', 'content': 'Route support tickets.'},
             {'role': 'user', 'content': ['Evaluate the ticket.', {'order': {'charges': [49, 49]}}]},
-            {'role': 'assistant', 'content': [{'refusal': 'No.'}]},
-            {'type': 'function_call', 'call_id': 'c1', 'name': 'lookup', 'arguments': '{"id":1}'},
+            {'role': 'assistant', 'content': [{'refusal': 'No.'}], 'phase': 'final_answer'},
+            {'type': 'function_call', 'call_id': 'c1', 'name': 'lookup', 'arguments': '{"id":1}', 'status': 'completed'},
             {'type': 'function_call_output', 'call_id': 'c1', 'output': 'paid twice'}])
+
+    def test_images_leave_a_marker_where_they_were(self):
+        url = 'data:image/png;base64,iVBORw0KGgo='
+        t = translate({**OPENAI, 'input': [
+            {'role': 'user', 'content': [{'type': 'input_text', 'text': 'before'}, {'type': 'input_image', 'image_url': url}]},
+            {'type': 'function_call', 'call_id': 'c', 'name': 'photo', 'arguments': '{}'},
+            {'type': 'function_call_output', 'call_id': 'c', 'output': [{'type': 'input_image', 'image_url': url}],
+             'status': 'incomplete'}]})
+        self.assertEqual(t.native['state'][0]['content'], ['before', {'image': 1}])
+        self.assertEqual(t.native['state'][2], {'type': 'function_call_output', 'call_id': 'c', 'output': [{'image': 2}],
+                                                'status': 'incomplete'})
+        self.assertEqual((t.native['images'], t.image_paths), ([url, url], ['input[0].content[1]', 'input[2].output[0]']))
 
     def test_unnamed_questions_and_boolean_choices(self):
         body = {**OPENAI, 'questions': [{'type': 'choice', 'instructions': 'Refund?', 'choices': [
@@ -212,6 +224,13 @@ class TranslateTests(unittest.TestCase):
              r'detail must be auto'),
             ({**OPENAI, 'input': [{'role': 'user', 'content': [{'type': 'input_file', 'file_id': 'f'}]}]},
              r'content\[0\]\.type'),
+            ({**OPENAI, 'input': [{'role': ['user'], 'content': 'x'}]}, r'input\[0\]\.role'),
+            ({**OPENAI, 'input': [{'role': 'assistant', 'content': 'x', 'phase': 'draft'}]}, r'input\[0\]\.phase'),
+            ({**OPENAI, 'input': [{'type': 'function_call', 'call_id': 'c', 'name': 'f', 'arguments': '', 'status': 'ok'}]},
+             r'input\[0\]\.status'),
+            (openai_question(predicate, instructions=[{'type': 'input_text', 'text': ' '}, {'type': 'input_text', 'text': ''}]),
+             'must not be empty'),
+            (openai_question(score, levels=[{'label': 'a'}, {'label': 'a'}]), r'levels\[1\]\.label repeats'),
         ]
         for body, message in cases:
             with self.subTest(message=message), self.assertRaisesRegex(DialectError, message):
@@ -309,6 +328,10 @@ class RouteTests(unittest.TestCase):
         r = self.post({**SYSTEMONE, 'questions': {'b': {'type': 'box', 'instructions': 'Find it'}}})
         self.assertEqual((r.status_code, r.json()['error']['code']), (422, 'invalid_request'))
         self.assertEqual(self.client.post('/v1/decisions', content=b'{"input": NaN}', headers=AUTH).status_code, 400)
+        overflow = b'{"model":"saina-helm","state":{"x":1e999},"questions":{"a":{"type":"noul","instructions":"q"}}}'
+        self.assertEqual(self.client.post('/v1/decisions', content=overflow, headers=AUTH).status_code, 400)
+        r = self.post({**OPENAI, 'input': [{'role': {'r': 1}, 'content': 'x'}]})
+        self.assertEqual((r.status_code, r.json()['error']['code']), (400, 'invalid_request'))
         self.assertEqual(self.scorer.calls, [])
 
     def test_native_limits_not_gateway_limits(self):
@@ -364,7 +387,7 @@ class OmniImageTests(unittest.TestCase):
                                          {'type': 'input_image', 'image_url': blue, 'detail': 'auto'}]}],
             'questions': [{'type': 'predicate', 'name': 'red', 'instructions': 'Is the first image red?'}]}
         native = {'model': 'saina-helm-2-omni-0.8b', 'images': [red, blue],
-                  'state': [{'role': 'user', 'content': 'Inspect the product.'}],
+                  'state': [{'role': 'user', 'content': ['Inspect the product.', {'image': 1}, {'image': 2}]}],
                   'questions': {'red': {'type': 'yes_no', 'question': 'Is the first image red?'}}}
         with TestClient(create_app(scorer=scorer, api_key='k')) as c:
             a = c.post('/v1/decisions', json=oai, headers=AUTH)
@@ -527,3 +550,15 @@ class CompressedBodyTests(unittest.TestCase):
             self.assertEqual((r.status_code, r.json()['error']['code']), (status, 'invalid_request'), encoding)
         r = self.post(gzip.compress(b' ' * 5000 + raw), 'gzip', limit=4096)  # a small body that expands past the limit
         self.assertEqual(r.status_code, 413)
+
+    def test_nothing_is_decompressed_without_a_valid_key(self):
+        import gzip
+        with TestClient(create_app(scorer=HashScorer(), api_key='k')) as c:
+            for headers in ({}, {'Authorization': 'Bearer wrong'}):
+                r = c.post('/v1/systemone', content=gzip.compress(b' ' * 10_000_000),
+                           headers={**headers, 'Content-Encoding': 'gzip'})
+                self.assertEqual((r.status_code, r.json()['error']['code']), (401, 'invalid_api_key'))
+            r = c.post('/v1/systemone', content=gzip.compress(json.dumps(SYSTEMONE).encode()),
+                       headers=[*AUTH.items(), ('Content-Type', 'application/json'), ('Content-Encoding', 'gzip'),
+                                ('Content-Encoding', 'identity')])
+            self.assertEqual(r.status_code, 200)

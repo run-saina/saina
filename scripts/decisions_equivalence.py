@@ -91,7 +91,8 @@ def image_fixtures():
         text = 'Inspect the attached product photos.'
         parts = [{'type': 'input_text', 'text': text}] + [{'type': 'input_image', 'image_url': u} for u in images]
         oai = {**openai(text, questions), 'model': 'saina-helm-2-omni-0.8b', 'input': [{'role': 'user', 'content': parts}]}
-        nat = {**native([{'role': 'user', 'content': text}], questions), 'model': 'saina-helm-2-omni-0.8b', 'images': images}
+        marked = [text] + [{'image': n} for n in range(1, len(images) + 1)]  # where each image was
+        nat = {**native([{'role': 'user', 'content': marked}], questions), 'model': 'saina-helm-2-omni-0.8b', 'images': images}
         out.append((name, {'native': ('/v1/ask', nat), 'openai': ('/v1/decisions', oai)}, len(questions)))
     return out
 

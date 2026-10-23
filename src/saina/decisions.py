@@ -157,6 +157,8 @@ def _parts(content, where, allowed, images, paths):
             out.append(_json_part(part, at))
         else:
             _image(part, at, images, paths)
+            # Marks where the image was: the n-th of the request's images (native images are read before the text).
+            out.append({'image': len(images)})
     if len(out) == 1 and isinstance(out[0], str):
         return out[0]
     return out
@@ -165,6 +167,19 @@ def _parts(content, where, allowed, images, paths):
 MESSAGE_PARTS = {'user': ('input_text', 'input_image', 'input_json'), 'developer': ('input_text',),
                  'system': ('input_text',), 'assistant': ('output_text', 'refusal')}
 TOOL_OUTPUT_PARTS = ('input_text', 'input_image')
+
+
+STATUSES = ('in_progress', 'completed', 'incomplete')
+
+
+def _carry(item, entry, field, allowed, at):
+    """Keep a field that can change an answer (a tool call's status, a message's phase) in the state."""
+    value = item.get(field)
+    if value is None:
+        return
+    if not isinstance(value, str) or value not in allowed:
+        raise DialectError(f'{at}.{field} must be one of: ' + ', '.join(allowed))
+    entry[field] = value
 
 
 def _input(value, images, paths):
@@ -181,10 +196,11 @@ def _input(value, images, paths):
         if kind == 'message':
             _only(item, {'type', 'role', 'content', 'phase'}, at)
             role = item.get('role')
-            if role not in MESSAGE_PARTS:
+            if not isinstance(role, str) or role not in MESSAGE_PARTS:
                 raise DialectError(f'{at}.role must be one of: user, developer, system, assistant')
             entry = {'role': role, 'content': _parts(item.get('content'), f'{at}.content', MESSAGE_PARTS[role],
                                                      images, paths)}
+            _carry(item, entry, 'phase', ('commentary', 'final_answer'), at)
         elif kind in ('function_call', 'custom_tool_call'):
             field = 'arguments' if kind == 'function_call' else 'input'
             _only(item, {'type', 'call_id', 'name', field, 'id', 'namespace', 'status'}, at)
@@ -194,6 +210,7 @@ def _input(value, images, paths):
                      field: _string(item.get(field), f'{at}.{field}', empty=True)}
             if item.get('namespace') is not None:
                 entry['namespace'] = _string(item['namespace'], f'{at}.namespace')
+            _carry(item, entry, 'status', STATUSES, at)
         elif kind in ('function_call_output', 'custom_tool_call_output'):
             _only(item, {'type', 'call_id', 'output', 'id', 'status'}, at)
             call = _string(item.get('call_id'), f'{at}.call_id')
@@ -201,6 +218,7 @@ def _input(value, images, paths):
                 raise DialectError(f'{at}.call_id does not match an earlier {kind.removesuffix("_output")}')
             entry = {'type': kind, 'call_id': call,
                      'output': _parts(item.get('output'), f'{at}.output', TOOL_OUTPUT_PARTS, images, paths)}
+            _carry(item, entry, 'status', STATUSES, at)
         else:
             raise DialectError(f'{at}.type must be one of: message, function_call, function_call_output, '
                                'custom_tool_call, custom_tool_call_output')
@@ -220,7 +238,7 @@ def _instructions(value, where):
                 raise DialectError(f'{where}[{j}] is an image; images in question instructions are not supported, '
                                    'put shared images in input')
     rendered = _parts(value, where, ('input_text', 'input_json'), images, paths)
-    if isinstance(rendered, str) and not rendered.strip():
+    if all(isinstance(r, str) and not r.strip() for r in ([rendered] if isinstance(rendered, str) else rendered)):
         raise DialectError(f'{where} must not be empty')
     return rendered
 
@@ -276,6 +294,8 @@ def _question(q, i, images, paths):
             lat = f'{at}.levels[{j}]'
             _only(_object(level, lat), {'label', 'description'}, lat)
             label = _string(level.get('label'), f'{lat}.label')
+            if label in values:
+                raise DialectError(f'{lat}.label repeats an earlier level; labels must be unique')
             description = level.get('description')
             rendered.append(label if description is None else
                             f'{label}: {_string(description, f"{lat}.description", empty=True)}')

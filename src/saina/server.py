@@ -149,13 +149,20 @@ class BoundedExecutor:
 class DecodeBody:
     """ASGI middleware: replaces a gzip or zstd request body by its decoded bytes (see saina.encoding)."""
 
-    def __init__(self, app, limit):
-        self.app, self.limit = app, limit
+    def __init__(self, app, limit, authorized):
+        self.app, self.limit, self.authorized = app, limit, authorized
 
     async def __call__(self, scope, receive, send):
-        header = dict(scope.get('headers') or []).get(b'content-encoding') if scope['type'] == 'http' else None
-        if header is None:
+        headers = (scope.get('headers') or []) if scope['type'] == 'http' else []
+        values = [v for k, v in headers if k == b'content-encoding']
+        if not values:
             return await self.app(scope, receive, send)
+        header = b','.join(values)
+        token = next((v for k, v in headers if k == b'authorization'), b'')
+        if not self.authorized(token[7:] if token[:7].lower() == b'bearer ' else b''):
+            # Nothing is decompressed for a caller without a valid key.
+            return await error(401, 'invalid_api_key', 'Invalid bearer token', {'WWW-Authenticate': 'Bearer'})(
+                scope, receive, send)
         chunks, more = [], True
         while more:
             message = await receive()
@@ -367,7 +374,9 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
 
     # Compressed request bodies (gzip or zstd, as the TypeSafe SDKs send by default) are decoded before routing,
     # at most SAINA_MAX_DECODED_BODY_BYTES (default 64 MiB) after decompression.
-    app.add_middleware(DecodeBody, limit=int(env('SAINA_MAX_DECODED_BODY_BYTES', str(64 << 20))))
+    def authorized(token):
+        return bool(token) and any([hmac.compare_digest(token.strip(), k) for k in (*keys, *service)])
+    app.add_middleware(DecodeBody, limit=int(env('SAINA_MAX_DECODED_BODY_BYTES', str(64 << 20))), authorized=authorized)
 
     @app.exception_handler(ApiError)
     async def api_error(request, exc):
@@ -579,8 +588,14 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
     def decisions_body(raw):
         def constant(name):
             raise ValueError(name)
+
+        def finite(text):
+            value = float(text)
+            if value != value or value in (float('inf'), float('-inf')):
+                raise ValueError(text)
+            return value
         try:
-            return json.loads(raw, parse_constant=constant)
+            return json.loads(raw, parse_constant=constant, parse_float=finite)
         except (ValueError, UnicodeDecodeError, RecursionError):
             raise ApiError(400, 'invalid_request', 'Request body must be JSON without NaN or infinite numbers') from None
 
