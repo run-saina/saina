@@ -1,0 +1,53 @@
+{
+ "request": {
+  "model": "saina-helm",
+  "input": "I was charged twice for my order and need the extra payment back today.",
+  "questions": [
+   {
+    "type": "choice",
+    "instructions": "Refund?",
+    "choices": [
+     {
+      "value": true
+     },
+     {
+      "value": false
+     }
+    ]
+   }
+  ]
+ },
+ "response": {
+  "model": "saina-helm-2-0.8b",
+  "answers": [
+   {
+    "type": "choice",
+    "name": null,
+    "choice": true,
+    "confidence": 0.37804878048780477,
+    "probabilities": [
+     {
+      "value": true,
+      "probability": 0.6890243902439024
+     },
+     {
+      "value": false,
+      "probability": 0.31097560975609756
+     }
+    ]
+   }
+  ],
+  "usage": {
+   "input_tokens": 17,
+   "input_tokens_details": {
+    "cached_tokens": 0,
+    "cache_write_tokens": 0
+   },
+   "output_tokens": 0,
+   "output_tokens_details": {
+    "reasoning_tokens": 0
+   },
+   "total_tokens": 17
+  }
+ }
+}

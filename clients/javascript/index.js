@@ -222,6 +222,28 @@ export class SainaHelm {
     return {result, metadata};
   }
 
+  /** POST /v1/decisions in the OpenAI Decisions shape: `input` plus a `questions` array (predicate, choice, score).
+   * Answers come back in question order. Saina extensions: `mode: 'decision'` with `threshold`/`min_margin`
+   * (unaccepted answers become billed `refusal` entries) and `specialist`. */
+  async decisions(request, options) { return (await this.decisionsWithMetadata(request, options)).result; }
+
+  async decisionsWithMetadata(request, {idempotencyKey} = {}) {
+    if (!request || !Array.isArray(request.questions) || !request.questions.length)
+      throw new TypeError('At least one question is required');
+    const {result, metadata} = await this.#post('/v1/decisions', request, idempotencyKey);
+    const probability = v => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
+    const ok = result && typeof result.model === 'string' && Array.isArray(result.answers) &&
+      result.answers.length === request.questions.length &&
+      request.questions.every((q, i) => {
+        const a = result.answers[i];
+        return a && a.name === (q.name ?? null) && (a.type === q.type || a.type === 'refusal') &&
+          (a.type !== 'predicate' || probability(a.probability)) &&
+          (!['choice', 'score'].includes(a.type) || (Array.isArray(a.probabilities) && probability(a.confidence)));
+      });
+    if (!ok) throw new SainaHelmError('Invalid Decisions response');
+    return {result, metadata};
+  }
+
   /** GET /v1/account/balance; credit fields are BigInt. */
   balance() { return this.#get('/v1/account/balance', {}); }
   /** GET /v1/account/usage; filters: from, to, channel. */

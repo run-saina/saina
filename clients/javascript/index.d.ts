@@ -134,8 +134,42 @@ export class SainaHelm {
   askWithMetadata(request: AskRequest, options?: CallOptions): Promise<{result: AskResponse; metadata: ResponseMetadata}>;
   systemOne(request: SystemOneRequest, options?: CallOptions): Promise<SystemOneResponse>;
   systemOneWithMetadata(request: SystemOneRequest, options?: CallOptions): Promise<{result: SystemOneResponse; metadata: ResponseMetadata}>;
+  decisions(request: DecisionsRequest, options?: CallOptions): Promise<DecisionsResponse>;
+  decisionsWithMetadata(request: DecisionsRequest, options?: CallOptions): Promise<{result: DecisionsResponse; metadata: ResponseMetadata}>;
   balance(): Promise<Balance>;
   usage(filters?: {from?: Filter; to?: Filter; channel?: Filter}): Promise<any>;
   requests(filters?: {cursor?: Filter; limit?: Filter; from?: Filter; to?: Filter; key_id?: Filter; channel?: Filter; status?: Filter}): Promise<any>;
+}
+/** POST /v1/decisions in the OpenAI Decisions request shape (see the Saina docs for what is accepted). */
+export interface DecisionsRequest {
+  model: string;
+  input: string | Array<Record<string, unknown>>;
+  questions: Array<
+    | {type: 'predicate'; name?: string; instructions: string | Array<Record<string, unknown>>; threshold?: number; min_margin?: number}
+    | {type: 'choice'; name?: string; instructions: string | Array<Record<string, unknown>>;
+       choices: Array<{value: string | boolean; description?: string}>; threshold?: number; min_margin?: number}
+    | {type: 'score'; name?: string; instructions: string | Array<Record<string, unknown>>;
+       levels: Array<{label: string; description?: string}>; threshold?: number}>;
+  /** Saina extensions. */
+  mode?: 'distribution' | 'decision';
+  threshold?: number;
+  min_margin?: number;
+  specialist?: string;
+}
+export type DecisionsAnswer =
+  | {type: 'predicate'; name: string | null; probability: number}
+  | {type: 'choice'; name: string | null; choice: string | boolean; confidence: number;
+     probabilities: Array<{value: string | boolean; probability: number}>}
+  | {type: 'score'; name: string | null; score: number; confidence: number;
+     probabilities: Array<{value: number; label: string; probability: number}>}
+  /** Only with a decision policy: `reason` and the distribution are Saina extensions. */
+  | {type: 'refusal'; name: string | null; reason: 'below_threshold' | 'below_margin' | 'tie'; probability?: number;
+     probabilities?: Array<{value: string | boolean | number; label?: string; probability: number}>};
+export interface DecisionsResponse {
+  model: string;
+  specialist?: string;
+  answers: DecisionsAnswer[];
+  usage: {input_tokens: number; input_tokens_details: {cached_tokens: 0; cache_write_tokens: 0};
+          output_tokens: 0; output_tokens_details: {reasoning_tokens: 0}; total_tokens: number};
 }
 export { SainaHelm as Saina, SainaHelmError as SainaError };

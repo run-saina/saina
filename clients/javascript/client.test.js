@@ -155,6 +155,20 @@ test('systemOne posts to /v1/systemone', async () => {
   assert.equal(calls[0].url, 'https://example.com/v1/systemone');
 });
 
+test('decisions posts the OpenAI shape to /v1/decisions and checks answer order', async () => {
+  const answer = {model: 'saina-helm-2-0.8b', answers: [{type: 'predicate', name: 'billing', probability: .9},
+    {type: 'choice', name: null, choice: true, confidence: .5, probabilities: [{value: true, probability: .75}, {value: false, probability: .25}]}],
+    usage: {input_tokens: 5, output_tokens: 0}};
+  const {client, calls} = scripted([json(answer), json({...answer, answers: [answer.answers[1], answer.answers[0]]})]);
+  const body = {model: 'saina-helm', input: 'Charged twice.', questions: [{type: 'predicate', name: 'billing', instructions: 'Billing?'},
+    {type: 'choice', instructions: 'Refund?', choices: [{value: true}, {value: false}]}]};
+  assert.equal((await client.decisions(body)).answers[1].choice, true);
+  assert.equal(calls[0].url, 'https://example.com/v1/decisions');
+  assert.deepEqual(JSON.parse(calls[0].init.body), body);
+  await assert.rejects(client.decisions(body), /Invalid Decisions response/);
+  await assert.rejects(client.decisions({...body, questions: []}), /At least one question/);
+});
+
 test('account methods parse credit strings to BigInt beyond 2^53', async () => {
   const big = '18446744073709551615';
   const {client, calls} = scripted([

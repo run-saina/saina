@@ -11,7 +11,9 @@ import asyncio
 from concurrent.futures import CancelledError as JobCancelled, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 import hmac
+import json
 import os
+import re
 import threading
 import time
 from fastapi import Depends, FastAPI, Request
@@ -19,11 +21,15 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import ValidationError
 from . import __version__
+from .encoding import EncodingError, decode_body
 from .errors import InputTooLong, ModelNotServed
 from .loader import load_scorer, load_specialist
 from .contract import (LEGACY_MODEL_ID, AskRequest, AskResponse, billable_ask, model_names, prepare_ask,
                        respond as respond_ask, specialist_of)
+from .decisions import (DIALECT_HEADER, DialectError, detect_dialect, native_error_path, respond as respond_decisions,
+                        translate)
 from .jev import SystemOneRequest, billable_systemone, prepare_systemone, respond as respond_systemone
 from .media import (IMAGE_MAX_PIXELS, MAX_AUDIO_SECONDS, MAX_AUDIOS, MAX_IMAGES, MAX_MEDIA_BYTES, MediaError,
                     decode_media, request_media)
@@ -138,6 +144,46 @@ class BoundedExecutor:
 
     def shutdown(self):
         self._pool.shutdown(wait=True, cancel_futures=True)
+
+
+class DecodeBody:
+    """ASGI middleware: replaces a gzip or zstd request body by its decoded bytes (see saina.encoding)."""
+
+    def __init__(self, app, limit, authorized):
+        self.app, self.limit, self.authorized = app, limit, authorized
+
+    async def __call__(self, scope, receive, send):
+        headers = (scope.get('headers') or []) if scope['type'] == 'http' else []
+        values = [v for k, v in headers if k == b'content-encoding']
+        if not values:
+            return await self.app(scope, receive, send)
+        header = b','.join(values)
+        token = next((v for k, v in headers if k == b'authorization'), b'')
+        if not self.authorized(token[7:] if token[:7].lower() == b'bearer ' else b''):
+            # Nothing is decompressed for a caller without a valid key.
+            return await error(401, 'invalid_api_key', 'Invalid bearer token', {'WWW-Authenticate': 'Bearer'})(
+                scope, receive, send)
+        chunks, more = [], True
+        while more:
+            message = await receive()
+            if message['type'] == 'http.disconnect':
+                return
+            chunks.append(message.get('body', b''))
+            more = message.get('more_body', False)
+        try:
+            body = decode_body(b''.join(chunks), header.decode('latin-1'), self.limit)
+        except EncodingError as e:
+            return await error(e.status, 'invalid_request', str(e))(scope, receive, send)
+        headers = [(k, v) for k, v in scope['headers'] if k not in (b'content-encoding', b'content-length')]
+        replayed = False
+
+        async def replay():
+            nonlocal replayed
+            if replayed:
+                return await receive()
+            replayed = True
+            return {'type': 'http.request', 'body': body, 'more_body': False}
+        await self.app({**scope, 'headers': headers + [(b'content-length', str(len(body)).encode())]}, replay, send)
 
 
 def _keys(value):
@@ -325,6 +371,12 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
         if proto == 'https':
             response.headers['Strict-Transport-Security'] = 'max-age=15552000'
         return response
+
+    # Compressed request bodies (gzip or zstd, as the TypeSafe SDKs send by default) are decoded before routing,
+    # at most SAINA_MAX_DECODED_BODY_BYTES (default 64 MiB) after decompression.
+    def authorized(token):
+        return bool(token) and any([hmac.compare_digest(token.strip(), k) for k in (*keys, *service)])
+    app.add_middleware(DecodeBody, limit=int(env('SAINA_MAX_DECODED_BODY_BYTES', str(64 << 20))), authorized=authorized)
 
     @app.exception_handler(ApiError)
     async def api_error(request, exc):
@@ -526,6 +578,71 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
                                       lambda prepared, execution, mid: respond_systemone(body, prepared, execution, mid),
                                       pick(body.model, fallback=True, specialist=body.specialist), body)
         return JSONResponse(result, headers=headers)
+
+    def validation_failed(exc):
+        # Same shape as FastAPI's own validation errors on the other routes; never echoes input values.
+        detail = [{'loc': ['body', *e['loc']], 'type': e['type'], 'msg': e['msg']} for e in exc.errors()]
+        return JSONResponse(status_code=422, content={
+            'error': {'code': 'invalid_request', 'message': 'Request validation failed'}, 'detail': detail})
+
+    def decisions_body(raw):
+        def constant(name):
+            raise ValueError(name)
+
+        def finite(text):
+            value = float(text)
+            if value != value or value in (float('inf'), float('-inf')):
+                raise ValueError(text)
+            return value
+        try:
+            return json.loads(raw, parse_constant=constant, parse_float=finite)
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            raise ApiError(400, 'invalid_request', 'Request body must be JSON without NaN or infinite numbers') from None
+
+    async def decisions(request: Request, kind: str = Depends(caller)):
+        # Either dialect, detected from the body (X-Saina-Dialect may confirm it, never override it). Unlike
+        # /v1/systemone, model names are exact here: a name this server does not serve is a 404, never another model.
+        body = decisions_body(await request.body())
+        try:
+            dialect = detect_dialect(body, request.headers.get(DIALECT_HEADER))
+        except DialectError as e:
+            raise ApiError(400, 'invalid_request', str(e)) from None
+        if dialect == 'systemone':
+            try:
+                s1 = SystemOneRequest.model_validate(body)
+            except ValidationError as exc:
+                return validation_failed(exc)
+            result, headers = await serve(request, kind, prepare_systemone(s1), billable_systemone(s1),
+                                          lambda prepared, execution, mid: respond_systemone(s1, prepared, execution, mid),
+                                          pick(s1.model, specialist=s1.specialist), s1)
+            return JSONResponse(result, headers={**headers, 'X-Saina-Dialect': 'systemone'})
+        try:
+            translation = translate(body)
+            native = AskRequest.model_validate(translation.native)
+        except DialectError as e:
+            raise ApiError(400, 'invalid_request', str(e)) from None
+        except ValidationError as exc:
+            first = exc.errors()[0]
+            raise ApiError(400, 'invalid_request', f'{native_error_path(first["loc"])}: {first["msg"]}') from None
+        model = pick(native.model, specialist=native.specialist)
+        if native.images and 'image' not in model_inputs(model):
+            # Refused before queueing or charging; an image is never read as text.
+            raise ApiError(400, 'invalid_request', f'{translation.image_paths[0]} is an image, and {model_id(model)} '
+                           'reads text only; send images to a model that reads them (GET /v1/models)')
+        try:
+            result, headers = await serve(request, kind, prepare_ask(native), billable_ask(native),
+                                          lambda prepared, execution, mid: respond_ask(native, prepared, execution, mid),
+                                          model, native)
+        except ApiError as e:
+            # Media errors name native positions (images[2]); name the input part the caller sent instead.
+            e.message = re.sub(r'images\[(\d+)\]', lambda m: translation.image_paths[int(m[1])], e.message)
+            raise
+        answered = AskResponse.model_validate(result).model_dump(exclude_unset=True)
+        return JSONResponse(respond_decisions(translation, answered), headers={**headers, 'X-Saina-Dialect': 'openai'})
+
+    # OpenAI Decisions clients post to {base}/decisions; gateway-style clients use /api/v1/decisions.
+    app.post('/v1/decisions')(decisions)
+    app.post('/api/v1/decisions')(decisions)
 
     @app.delete('/v1/internal/requests/{request_id}', dependencies=[Depends(service_only)])
     def cancel(request_id: str):

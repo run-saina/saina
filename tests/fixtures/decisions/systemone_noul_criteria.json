@@ -1,0 +1,36 @@
+{
+ "request": {
+  "model": "saina-helm",
+  "state": {
+   "subject": "Refund",
+   "body": "I was charged twice for my order and need the extra payment back today."
+  },
+  "questions": {
+   "spam": {
+    "type": "noul",
+    "instructions": "Is this spam?",
+    "criteria": {
+     "true": "Unsolicited advertising",
+     "false": "A real customer"
+    }
+   }
+  }
+ },
+ "response": {
+  "model": "saina-helm-2-0.8b",
+  "answers": {
+   "spam": {
+    "type": "noul",
+    "noul": 0.3852040816326531
+   }
+  },
+  "usage": {
+   "input_tokens": 24,
+   "output_tokens": 0
+  }
+ },
+ "headers": {
+  "x-saina-billable-tokens": "24",
+  "x-saina-input-tokens": "40"
+ }
+}

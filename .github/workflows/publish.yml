@@ -4,8 +4,13 @@ name: publish
 on:
   push:
     tags: ['v*']
+permissions:
+  contents: read
 jobs:
+  contracts:
+    uses: ./.github/workflows/contracts.yml
   pypi:
+    needs: contracts
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

@@ -1,0 +1,72 @@
+{
+ "request": {
+  "model": "saina-helm",
+  "state": "I was charged twice for my order and need the extra payment back today.",
+  "questions": {
+   "billing": {
+    "type": "noul",
+    "instructions": "Is this about billing?"
+   },
+   "team": {
+    "type": "choice",
+    "instructions": "Which team should handle it?",
+    "criteria": {
+     "billing": "Payments, invoices and refunds",
+     "technical": "Problems using the product",
+     "other": null
+    }
+   },
+   "urgency": {
+    "type": "score",
+    "instructions": "How urgent is it?",
+    "criteria": [
+     "Can wait",
+     "This week",
+     "Today"
+    ]
+   }
+  }
+ },
+ "response": {
+  "model": "saina-helm-2-0.8b",
+  "answers": {
+   "billing": {
+    "type": "noul",
+    "noul": 0.5555555555555556
+   },
+   "team": {
+    "type": "choice",
+    "probabilities": {
+     "billing": 0.5016181229773463,
+     "technical": 0.016181229773462782,
+     "other": 0.48220064724919093
+    },
+    "choice": "billing",
+    "confidence": 0.25242718446601947
+   },
+   "urgency": {
+    "type": "score",
+    "probabilities": {
+     "0": 0.22509225092250923,
+     "1": 0.3247232472324723,
+     "2": 0.45018450184501846
+    },
+    "score": 1.2250922509225093,
+    "legend": {
+     "0": "Can wait",
+     "1": "This week",
+     "2": "Today"
+    },
+    "confidence": 0.0
+   }
+  },
+  "usage": {
+   "input_tokens": 43,
+   "output_tokens": 0
+  }
+ },
+ "headers": {
+  "x-saina-billable-tokens": "43",
+  "x-saina-input-tokens": "40"
+ }
+}

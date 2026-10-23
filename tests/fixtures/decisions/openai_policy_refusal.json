@@ -1,0 +1,113 @@
+{
+ "request": {
+  "model": "saina-helm",
+  "input": "I was charged twice for my order and need the extra payment back today.",
+  "questions": [
+   {
+    "type": "predicate",
+    "name": "billing",
+    "instructions": "Is this about billing?"
+   },
+   {
+    "type": "choice",
+    "name": "team",
+    "instructions": "Which team should handle it?",
+    "choices": [
+     {
+      "value": "billing",
+      "description": "Payments, invoices and refunds"
+     },
+     {
+      "value": "technical",
+      "description": "Problems using the product"
+     },
+     {
+      "value": "other"
+     }
+    ]
+   },
+   {
+    "type": "score",
+    "name": "urgency",
+    "instructions": "How urgent is it?",
+    "levels": [
+     {
+      "label": "Can wait"
+     },
+     {
+      "label": "This week"
+     },
+     {
+      "label": "Today"
+     }
+    ]
+   }
+  ],
+  "mode": "decision",
+  "threshold": 0.99
+ },
+ "response": {
+  "model": "saina-helm-2-0.8b",
+  "answers": [
+   {
+    "type": "refusal",
+    "name": "billing",
+    "reason": "below_threshold",
+    "probability": 0.5555555555555556
+   },
+   {
+    "type": "refusal",
+    "name": "team",
+    "reason": "below_threshold",
+    "probabilities": [
+     {
+      "value": "billing",
+      "probability": 0.5016181229773463
+     },
+     {
+      "value": "technical",
+      "probability": 0.016181229773462782
+     },
+     {
+      "value": "other",
+      "probability": 0.48220064724919093
+     }
+    ]
+   },
+   {
+    "type": "refusal",
+    "name": "urgency",
+    "reason": "below_threshold",
+    "probabilities": [
+     {
+      "value": 0,
+      "label": "Can wait",
+      "probability": 0.22509225092250923
+     },
+     {
+      "value": 1,
+      "label": "This week",
+      "probability": 0.3247232472324723
+     },
+     {
+      "value": 2,
+      "label": "Today",
+      "probability": 0.45018450184501846
+     }
+    ]
+   }
+  ],
+  "usage": {
+   "input_tokens": 43,
+   "input_tokens_details": {
+    "cached_tokens": 0,
+    "cache_write_tokens": 0
+   },
+   "output_tokens": 0,
+   "output_tokens_details": {
+    "reasoning_tokens": 0
+   },
+   "total_tokens": 43
+  }
+ }
+}

@@ -1,0 +1,66 @@
+{
+ "request": {
+  "model": "saina-helm",
+  "state": "I was charged twice for my order and need the extra payment back today.",
+  "questions": {
+   "urgent": {
+    "type": "score",
+    "instructions": "Urgency?",
+    "criteria": [
+     "level 0",
+     "level 1",
+     "level 2",
+     "level 3",
+     "level 4",
+     "level 5",
+     "level 6",
+     "level 7",
+     "level 8",
+     "level 9"
+    ]
+   }
+  }
+ },
+ "response": {
+  "model": "saina-helm-2-0.8b",
+  "answers": {
+   "urgent": {
+    "type": "score",
+    "probabilities": {
+     "0": 0.061746987951807226,
+     "1": 0.11746987951807229,
+     "2": 0.09563253012048192,
+     "3": 0.11746987951807229,
+     "4": 0.04216867469879518,
+     "5": 0.04593373493975904,
+     "6": 0.1746987951807229,
+     "7": 0.18147590361445784,
+     "8": 0.054969879518072286,
+     "9": 0.10843373493975904
+    },
+    "score": 4.793674698795181,
+    "legend": {
+     "0": "level 0",
+     "1": "level 1",
+     "2": "level 2",
+     "3": "level 3",
+     "4": "level 4",
+     "5": "level 5",
+     "6": "level 6",
+     "7": "level 7",
+     "8": "level 8",
+     "9": "level 9"
+    },
+    "confidence": 0.0
+   }
+  },
+  "usage": {
+   "input_tokens": 35,
+   "output_tokens": 0
+  }
+ },
+ "headers": {
+  "x-saina-billable-tokens": "35",
+  "x-saina-input-tokens": "40"
+ }
+}
