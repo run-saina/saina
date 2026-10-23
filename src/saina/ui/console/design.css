@@ -1,0 +1,61 @@
+:root{
+/* Brand — exact values from saina-logo-system.pdf p.03 */
+--saina-ink:#141414;--saina-reverse-ink:#F3F1ED;--saina-paper:#F3F0EA;--saina-black:#070707;--saina-sage:#A3C9B2;--saina-white:#FFFFFF;
+/* Neutral ramp — warm greys interpolated between paper and ink. #6E6A64 is from favicon-sheet.svg labels */
+--saina-grey-50:#F8F6F2;--saina-grey-100:#EAE6DF;--saina-grey-200:#DCD7CE;--saina-grey-300:#C4BEB4;--saina-grey-400:#9C978F;--saina-grey-500:#6E6A64;--saina-grey-600:#4E4B47;--saina-grey-700:#33312E;--saina-grey-800:#1F1E1C;
+/* Semantic — derived, low-chroma to sit with sage (not in source; see readme) */
+--saina-sage-deep:#3F6B52;--saina-amber:#B7791F;--saina-amber-tint:#F3E6CC;--saina-red:#B3382C;--saina-red-tint:#F2DAD5;
+/* Semantic aliases */
+--surface-page:var(--saina-paper);--surface-card:var(--saina-white);--surface-sunken:var(--saina-grey-100);--surface-inverse:var(--saina-black);--surface-inverse-raised:var(--saina-grey-800);
+--text-primary:var(--saina-ink);--text-secondary:var(--saina-grey-500);--text-muted:var(--saina-grey-400);--text-inverse:var(--saina-reverse-ink);--text-inverse-secondary:var(--saina-grey-400);
+--border-default:var(--saina-grey-200);--border-strong:var(--saina-ink);--border-subtle:var(--saina-grey-100);--border-inverse:var(--saina-grey-700);
+--action-primary-bg:var(--saina-ink);--action-primary-bg-hover:var(--saina-black);--action-primary-fg:var(--saina-reverse-ink);
+--action-secondary-bg:transparent;--action-secondary-bg-hover:var(--saina-grey-100);--action-secondary-fg:var(--saina-ink);
+--focus-ring:var(--saina-ink);
+--accent-dot:var(--saina-sage);
+--status-selected:var(--saina-sage-deep);--status-selected-tint:#DCEAE1;
+--status-fallback:var(--saina-amber);--status-fallback-tint:var(--saina-amber-tint);
+--status-error:var(--saina-red);--status-error-tint:var(--saina-red-tint);
+}
+:root{
+--font-sans:'Inter',ui-sans-serif,system-ui,sans-serif;
+--font-display:'Inter','Inter Display','Söhne','Neue Haas Grotesk Display',ui-sans-serif,sans-serif;
+--font-mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+/* Wordmark spec: weight 645, tracking -13/1000em */
+--weight-wordmark:645;--tracking-wordmark:-0.013em;
+--weight-regular:400;--weight-medium:500;--weight-semibold:600;--weight-display:645;--weight-bold:700;
+--text-xs:12px;--text-sm:13px;--text-base:15px;--text-md:17px;--text-lg:20px;--text-xl:26px;--text-2xl:34px;--text-3xl:46px;--text-4xl:64px;--text-5xl:88px;
+--leading-tight:1.05;--leading-snug:1.25;--leading-normal:1.5;--leading-code:1.6;
+--tracking-display:-0.025em;--tracking-heading:-0.013em;--tracking-body:0;--tracking-label:0.04em;
+/* Roles */
+--type-display:var(--weight-display) var(--text-4xl)/var(--leading-tight) var(--font-display);
+--type-h1:var(--weight-display) var(--text-3xl)/var(--leading-tight) var(--font-display);
+--type-h2:var(--weight-semibold) var(--text-2xl)/var(--leading-snug) var(--font-display);
+--type-h3:var(--weight-semibold) var(--text-lg)/var(--leading-snug) var(--font-sans);
+--type-body:var(--weight-regular) var(--text-base)/var(--leading-normal) var(--font-sans);
+--type-small:var(--weight-regular) var(--text-sm)/var(--leading-normal) var(--font-sans);
+--type-label:var(--weight-medium) var(--text-xs)/1.3 var(--font-sans);
+--type-code:var(--weight-regular) var(--text-sm)/var(--leading-code) var(--font-mono);
+}
+:root{
+--space-0:0;--space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:20px;--space-6:24px;--space-8:32px;--space-10:40px;--space-12:48px;--space-16:64px;--space-24:96px;
+/* Corners: the mark and favicon tiles are square. UI follows. */
+--radius-0:0;--radius-1:2px;--radius-full:999px;
+--radius-control:var(--radius-0);--radius-card:var(--radius-0);
+--border-width:1px;--border-width-strong:1.5px;
+/* Elevation: flat. Only overlays get a shadow, and it is soft and neutral. */
+--shadow-none:none;--shadow-overlay:0 1px 0 rgba(20,20,20,.04),0 12px 32px -8px rgba(20,20,20,.18);
+--control-h-sm:28px;--control-h-md:36px;--control-h-lg:44px;
+--duration-fast:90ms;
+--duration-base:160ms;
+--ease-standard:cubic-bezier(.2,0,0,1);
+--content-max:1120px;
+/* Clear space rule: 1 X (wordmark x-height) on every side. Min lockup 120px wide; primary mark never below 24px. */
+--logo-min-width:120px;--mark-min-size:24px;
+}
+html{-webkit-font-smoothing:antialiased;font-optical-sizing:auto}
+body{margin:0;background:var(--surface-page);color:var(--text-primary);font:var(--type-body)}
+a{color:var(--text-primary);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px}
+a:hover{color:var(--saina-black);text-decoration-thickness:2px}
+code,pre,kbd{font-family:var(--font-mono)}
+::selection{background:var(--saina-ink);color:var(--saina-reverse-ink)}
