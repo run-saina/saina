@@ -22,7 +22,7 @@ pip install 'saina[media]'         # decoding images and audio (server, local in
 
 From a checkout, use `pip install .` or `pip install '.[local,server]'`.
 
-### Offline artifact diagnostics (unreleased)
+### Offline artifact diagnostics
 
 From this checkout, check an already downloaded bundle without loading a model:
 
@@ -348,7 +348,7 @@ No training datasets, private history, model weights, or credentials are include
 For integration support and developer enquiries, email [dev@saina.run](mailto:dev@saina.run).
 
 
-### Local playground (unreleased)
+### Local playground
 
 ```sh
 saina playground
