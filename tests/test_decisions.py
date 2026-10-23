@@ -451,3 +451,79 @@ class SystemOneGoldenTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def serve_in_thread(app):
+    """A real HTTP server on a free local port, for clients that speak HTTP (the Saina client, official SDKs)."""
+    import socket
+    import threading
+    import time
+    import uvicorn
+    sock = socket.socket()
+    sock.bind(('127.0.0.1', 0))
+    server = uvicorn.Server(uvicorn.Config(app, log_level='warning', lifespan='on'))
+    thread = threading.Thread(target=server.run, kwargs={'sockets': [sock]}, daemon=True)
+    thread.start()
+    while not server.started:
+        time.sleep(.01)
+    return server, thread, f'http://127.0.0.1:{sock.getsockname()[1]}'
+
+
+@unittest.skipUnless(HAVE_FASTAPI, 'fastapi and httpx required')
+class ClientEndToEndTests(unittest.TestCase):
+    def test_python_client_decisions_helper(self):
+        from saina import Saina, SainaError
+        server, thread, url = serve_in_thread(create_app(scorer=HashScorer(), api_key='k'))
+        try:
+            client = Saina(url, api_key='k')
+            result = client.decisions(model='saina-helm', input=STATE, questions=OPENAI['questions'])
+            self.assertEqual([a['name'] for a in result['answers']], ['billing', 'team', 'urgency'])
+            native = client.ask(model='saina-helm', state=STATE, questions=NATIVE['questions'])
+            self.assertEqual(result['answers'][0]['probability'], native['answers']['billing']['yes'])
+            refused = client.decisions(model='saina-helm', input=STATE, questions=OPENAI['questions'][:1],
+                                       mode='decision', threshold=0.99)
+            self.assertEqual(refused['answers'][0]['type'], 'refusal')
+            with self.assertRaises(SainaError) as e:
+                client.decisions(model='gpt-6-luna', input=STATE, questions=OPENAI['questions'])
+            self.assertEqual((e.exception.status, e.exception.code), (404, 'not_found'))
+        finally:
+            server.should_exit = True
+            thread.join(5)
+
+
+@unittest.skipUnless(HAVE_FASTAPI, 'fastapi and httpx required')
+class CompressedBodyTests(unittest.TestCase):
+    """The TypeSafe SDKs zstd-compress bodies of 1 KiB or more by default."""
+
+    def post(self, raw, encoding, limit=None):
+        import os as _os
+        from unittest.mock import patch
+        env = {'SAINA_MAX_DECODED_BODY_BYTES': str(limit)} if limit else {}
+        with patch.dict(_os.environ, env):
+            app = create_app(scorer=HashScorer(), api_key='k')
+        with TestClient(app) as c:
+            return c.post('/v1/systemone', content=raw,
+                          headers={**AUTH, 'Content-Type': 'application/json', 'Content-Encoding': encoding})
+
+    def test_gzip_and_zstd_bodies_answer_like_plain_ones(self):
+        import gzip
+        from saina.encoding import _zstd
+        body = {**SYSTEMONE, 'state': STATE * 30}
+        raw = json.dumps(body).encode()
+        with TestClient(create_app(scorer=HashScorer(), api_key='k')) as c:
+            plain = c.post('/v1/systemone', json=body, headers=AUTH).json()
+        self.assertEqual(self.post(gzip.compress(raw), 'gzip').json(), plain)
+        self.assertEqual(self.post(gzip.compress(raw[:500]) + gzip.compress(raw[500:]), 'x-gzip').json(), plain)
+        if _zstd is not None:
+            self.assertEqual(self.post(_zstd.compress(raw), 'zstd').json(), plain)
+        self.assertEqual(self.post(raw, 'identity').json(), plain)
+
+    def test_bad_encodings_are_refused(self):
+        import gzip
+        raw = json.dumps(SYSTEMONE).encode()
+        for data, encoding, status in ((raw, 'br', 415), (gzip.compress(gzip.compress(raw)), 'gzip, gzip', 415),
+                                       (b'not gzip', 'gzip', 400), (gzip.compress(raw)[:-9], 'gzip', 400)):
+            r = self.post(data, encoding)
+            self.assertEqual((r.status_code, r.json()['error']['code']), (status, 'invalid_request'), encoding)
+        r = self.post(gzip.compress(b' ' * 5000 + raw), 'gzip', limit=4096)  # a small body that expands past the limit
+        self.assertEqual(r.status_code, 413)

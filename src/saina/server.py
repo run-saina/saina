@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import ValidationError
 from . import __version__
+from .encoding import EncodingError, decode_body
 from .errors import InputTooLong, ModelNotServed
 from .loader import load_scorer, load_specialist
 from .contract import (LEGACY_MODEL_ID, AskRequest, AskResponse, billable_ask, model_names, prepare_ask,
@@ -143,6 +144,39 @@ class BoundedExecutor:
 
     def shutdown(self):
         self._pool.shutdown(wait=True, cancel_futures=True)
+
+
+class DecodeBody:
+    """ASGI middleware: replaces a gzip or zstd request body by its decoded bytes (see saina.encoding)."""
+
+    def __init__(self, app, limit):
+        self.app, self.limit = app, limit
+
+    async def __call__(self, scope, receive, send):
+        header = dict(scope.get('headers') or []).get(b'content-encoding') if scope['type'] == 'http' else None
+        if header is None:
+            return await self.app(scope, receive, send)
+        chunks, more = [], True
+        while more:
+            message = await receive()
+            if message['type'] == 'http.disconnect':
+                return
+            chunks.append(message.get('body', b''))
+            more = message.get('more_body', False)
+        try:
+            body = decode_body(b''.join(chunks), header.decode('latin-1'), self.limit)
+        except EncodingError as e:
+            return await error(e.status, 'invalid_request', str(e))(scope, receive, send)
+        headers = [(k, v) for k, v in scope['headers'] if k not in (b'content-encoding', b'content-length')]
+        replayed = False
+
+        async def replay():
+            nonlocal replayed
+            if replayed:
+                return await receive()
+            replayed = True
+            return {'type': 'http.request', 'body': body, 'more_body': False}
+        await self.app({**scope, 'headers': headers + [(b'content-length', str(len(body)).encode())]}, replay, send)
 
 
 def _keys(value):
@@ -330,6 +364,10 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
         if proto == 'https':
             response.headers['Strict-Transport-Security'] = 'max-age=15552000'
         return response
+
+    # Compressed request bodies (gzip or zstd, as the TypeSafe SDKs send by default) are decoded before routing,
+    # at most SAINA_MAX_DECODED_BODY_BYTES (default 64 MiB) after decompression.
+    app.add_middleware(DecodeBody, limit=int(env('SAINA_MAX_DECODED_BODY_BYTES', str(64 << 20))))
 
     @app.exception_handler(ApiError)
     async def api_error(request, exc):

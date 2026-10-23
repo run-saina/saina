@@ -246,6 +246,24 @@ class SainaHelm:
             raise SainaHelmError('Invalid System One response')
         return result, meta
 
+    def decisions(self, *, model, input, questions, idempotency_key=None, **extensions):
+        """Call ``POST /v1/decisions`` in the OpenAI Decisions request shape: ``input`` (a string or OpenAI input
+        items) and a ``questions`` array of ``predicate``, ``choice`` and ``score`` questions. Answers come back in
+        question order, in the same shape the official OpenAI SDK reads. Saina extensions are passed as keywords:
+        ``mode='decision'`` with ``threshold``/``min_margin`` turns answers the policy does not accept into
+        ``refusal`` entries (still billed), and ``specialist`` selects a domain specialist."""
+        return self.decisions_with_metadata(model=model, input=input, questions=questions,
+                                            idempotency_key=idempotency_key, **extensions)[0]
+
+    def decisions_with_metadata(self, *, model, input, questions, idempotency_key=None, **extensions):
+        """Like :meth:`decisions`, returning ``(result, ResponseMetadata)``."""
+        if not isinstance(questions, (list, tuple)) or not questions:
+            raise ValueError('At least one question is required')
+        payload = dict(model=model, input=input, questions=list(questions), **extensions)
+        result, meta = self._post('/v1/decisions', payload, idempotency_key)
+        _validate_decisions(payload, result)
+        return result, meta
+
     # Account (read-only, API key) ----------------------------------------------------------------------
 
     def balance(self):
@@ -393,6 +411,23 @@ def _validate_answers(request, result):
                 if (not isinstance(selections, list) or not all(isinstance(k, str) and k in labels for k in selections) or
                         len(set(selections)) != len(selections)):
                     fail()
+
+
+def _validate_decisions(request, result):
+    def probability(value):
+        return type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 1
+
+    answers = result.get('answers') if isinstance(result, dict) else None
+    if (not isinstance(result.get('model') if isinstance(result, dict) else None, str) or not isinstance(answers, list)
+            or len(answers) != len(request['questions'])):
+        raise SainaHelmError('Invalid Decisions response')
+    for q, a in zip(request['questions'], answers):
+        if (not isinstance(a, dict) or a.get('name') != q.get('name') or a.get('type') not in (q.get('type'), 'refusal')
+                or a['type'] == 'predicate' and not probability(a.get('probability'))
+                or a['type'] in ('choice', 'score') and not (isinstance(a.get('probabilities'), list)
+                                                             and probability(a.get('confidence')))):
+            raise SainaHelmError('Invalid Decisions response')
+
 
 Saina = SainaHelm
 SainaError = SainaHelmError
