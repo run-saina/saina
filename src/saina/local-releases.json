@@ -185,6 +185,62 @@
       }
     }
   },
+  "helm3": {
+    "native": {
+      "repo": "run-saina/saina-helm-3-0.8b",
+      "revision": "5529b6ae68055eea269437123411fdc799d1894e",
+      "files": {
+        "artifact-manifest.json": {
+          "size": 1185,
+          "sha256": "7fd8e1eb8dfab4141bc7c5684c7e4a65fc3ac7d6de06779cae16fd0e5a7a68c0"
+        },
+        "chat_template.jinja": {
+          "size": 7755,
+          "sha256": "273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80"
+        },
+        "config.json": {
+          "size": 3031,
+          "sha256": "a433ba078f1485b6ac10040a53e361dd626c4d5f6767cf8a2a67e3a43c55bbe7"
+        },
+        "experts.safetensors": {
+          "size": 9085440,
+          "sha256": "558b2761a4cebd3dd39e72bbf68f001882b8ba2ac81b3d21de4d5df4b192c3e4"
+        },
+        "generation_config.json": {
+          "size": 116,
+          "sha256": "d0bb1d295ae3e46bb02d6d1a4dc59d689ec822d7479a32835f6945db85c3512a"
+        },
+        "head-config.json": {
+          "size": 13119,
+          "sha256": "d9fd3cee467668f472ed7de0d7f3ef857e7c443a4917dfd6935b822668505ccd"
+        },
+        "head.safetensors": {
+          "size": 2408560,
+          "sha256": "fbf8c17c37a5a9b7908f2304d787ed262144fa15aebb35ec6636a9ca86318d82"
+        },
+        "merge-provenance.json": {
+          "size": 718,
+          "sha256": "4c8cd1e72d4b2ad268e2ec2a4c6a0c5cb8e2f7d73f954bb52bc10944ef77799d"
+        },
+        "model.safetensors": {
+          "size": 1706030528,
+          "sha256": "d3d50e46b18bc331d7301403338f89707b9fd5553a4f1069960ae02f3935851a"
+        },
+        "preprocessor_config.json": {
+          "size": 443,
+          "sha256": "3a159dfec9978a186a72ba085e0ad6a050f3968d8b364218d7bd13f5c89381f2"
+        },
+        "tokenizer.json": {
+          "size": 12807982,
+          "sha256": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42"
+        },
+        "tokenizer_config.json": {
+          "size": 16709,
+          "sha256": "49e2b6e395f959f077f1e992b338919c0d4a9732fc6e613995e06557f843500c"
+        }
+      }
+    }
+  },
   "helm2-routing": {
     "native": {
       "repo": "run-saina/saina-helm-2-routing-0.8b",
