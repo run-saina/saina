@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 from .prompt import (MULTIMODAL_PROMPT, PROMPT_FORMATS, SHARED_PROMPTS, answer_codes, encode, encode_shared_prompt,
                      insert_images)
-from .loader import LEGACY_MODEL_ID, checkpoint_inputs, checkpoint_model_id
+from .loader import LEGACY_MODEL_ID, checkpoint_format, checkpoint_inputs, checkpoint_model_id
 from .prepare import bill, billable_ask, billable_systemone, prepare_ask, prepare_systemone, encode_all
 
 TOKENIZER_FILES = ['*.json', '*.txt', '*.model', '*.jinja', '*.tiktoken']
@@ -51,6 +51,7 @@ class TokenCounter:
             from huggingface_hub import snapshot_download
             root = Path(snapshot_download(checkpoint, revision=revision, allow_patterns=TOKENIZER_FILES))
         config = json.loads((root / 'head-config.json').read_text())
+        checkpoint_format(root)  # refuse formats this runtime cannot count for; format 4 counts like format 3
         tokenizer = AutoTokenizer.from_pretrained(str(root), trust_remote_code=False)
         codes, code_ids = answer_codes(tokenizer)
         if codes != config['codes'] or code_ids != config['code_ids']:
