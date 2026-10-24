@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.1
+
+- **Memory-light format 4 attention.** The bidirectional prompt attention of format 4 checkpoints no longer builds a
+  dense mask over the whole input. In the full-attention layers the prompt tokens now attend to the prompt with no
+  mask at all, and the few readout slots attend through a small mask of their own, with grouped key and value heads
+  never repeated. Memory now grows with the input as on a causal pass, so long requests that ran out of GPU memory
+  on 0.9.0 fit. The attention is the same as in 0.9.0 (prompt tokens read the whole prompt, readout slots stay
+  causal, linear-attention layers unchanged), and so are the answers, up to floating-point rounding. Padded inputs
+  and attention implementations that always build masks keep the dense-mask path.
+
 ## 0.9.0
 
 - **Checkpoint format 4.** A format 4 checkpoint is a format 3 checkpoint (shared multimodal prompt, routed head,
