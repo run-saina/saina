@@ -198,7 +198,15 @@ CATALOG = {
                           'hugging_face_id': 'run-saina/saina-helm-2-0.8b'},
     'saina-helm-2-omni-0.8b': {'name': 'Saina: Helm 2 Omni 0.8B', 'created': 1792022400,
                                'hugging_face_id': 'run-saina/saina-helm-2-omni-0.8b'},
+    'saina-helm-3-0.8b': {'name': 'Saina: Helm 3 0.8B (Preview)', 'created': 1792800000,
+                          'hugging_face_id': 'run-saina/saina-helm-3-0.8b',
+                          'description': ('Saina Helm 3 (Preview) is a native multimodal decision model. It reads a '
+                                          'state with text, images and audio and answers typed questions (noul, '
+                                          'choice, score) with a probability for every option, instead of '
+                                          'generating text.')},
 }
+DESCRIPTION = ('Saina Helm is an open 0.8B decision model for workflow automation. It reads a state and answers typed '
+               'questions (noul, choice, score) with a probability for every option, instead of generating text.')
 
 
 def model_id(scorer):
@@ -548,11 +556,9 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
             return {
                 'schema_version': '2.4',
                 'id': model_id(scorer),
+                'description': DESCRIPTION,
                 **known,
                 'quantization': 'bf16',
-                'description': ('Saina Helm is an open 0.8B decision model for workflow automation. It reads a state and '
-                                'answers typed questions (noul, choice, score) with a probability for every option, '
-                                'instead of generating text.'),
                 'input_modalities': modalities,
                 'inputs': model_inputs(scorer),
                 'specialists': [x['id'] for x in specialist_listing(scorer)],

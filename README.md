@@ -7,8 +7,9 @@ The Helm weights are released under Apache-2.0, including for commercial use.
 Their training data was limited to permissively licensed sources.
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/run-saina/saina/blob/main/examples/saina_colab.ipynb)
-Models: [Helm 2 0.8B](https://huggingface.co/run-saina/saina-helm-2-0.8b) (current) and the original
-[Helm 0.8B](https://huggingface.co/run-saina/saina-helm-0.8b). Try Helm in
+Models: [Helm 2 0.8B](https://huggingface.co/run-saina/saina-helm-2-0.8b) (current),
+[Helm 3 0.8B](https://huggingface.co/run-saina/saina-helm-3-0.8b) (Preview, a native multimodal decision model)
+and the original [Helm 0.8B](https://huggingface.co/run-saina/saina-helm-0.8b). Try Helm in
 [`examples/saina_colab.ipynb`](examples/saina_colab.ipynb), run the weights locally through the SDK,
 or call [Replicate](https://replicate.com/run-saina/saina-helm-2-0.8b) or your own endpoint.
 
@@ -95,7 +96,7 @@ client.usage(from_='2026-10-01'); client.requests(limit=50)
 ## Model names
 
 `saina-helm` selects whichever Helm the endpoint serves. Release names (`saina-helm-2-0.8b`,
-`saina-helm-0.8b`) only reach that exact model; an endpoint serving a different release answers `404`.
+`saina-helm-3-0.8b`, `saina-helm-0.8b`) only reach that exact model; an endpoint serving a different release answers `404`.
 Responses always give the release name of the model that answered.
 
 ## Images and audio
@@ -183,7 +184,8 @@ answers = helm.ask(model='saina-helm', state='I was charged twice.', questions={
 The context limit defaults to the checkpoint's trained limit; pass `max_length=` (or set
 `SAINA_MAX_LENGTH` for the server) to serve a lower limit that fits your GPU. Longer inputs are
 rejected, never truncated. Checkpoint formats newer than the installed package are refused with
-a request to upgrade.
+a request to upgrade. Helm 3 checkpoints (format 4) need saina 0.9.0 or later: their prompt reads in both
+directions, so an older runtime refuses them rather than reading them as a different model.
 
 ## Transformers pipeline
 

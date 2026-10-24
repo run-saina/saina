@@ -5,12 +5,16 @@ import re
 from pathlib import Path
 from .prompt import (MULTIMODAL_PROMPT, SHARED_PROMPT, VISION_TOKENS, answer_codes,  # noqa: F401 (re-exported)
                      encode, encode_agentic_prompt, encode_head_prompt, encode_shared_prompt, insert_images,
-                     shared_positions)
+                     shared_positions, shared_prompt_tokens)
+from .attention import MODES as PROMPT_ATTENTION_MODES, prompt_attention
 
-CHECKPOINT_FORMATS = (1, 2, 3)
+CHECKPOINT_FORMATS = (1, 2, 3, 4)
 # Format 1: one prompt per question. 2: one shared pass for every question. 3: a shared pass that also reads
-# images (and audio, as spectrogram images).
-FORMAT_PROMPTS = {2: SHARED_PROMPT, 3: MULTIMODAL_PROMPT}
+# images (and audio, as spectrogram images). 4: format 3 whose prompt reads both ways in the full-attention
+# layers (saina.attention); an older runtime must refuse it, since reading it causally is a different model.
+FORMAT_PROMPTS = {2: SHARED_PROMPT, 3: MULTIMODAL_PROMPT, 4: MULTIMODAL_PROMPT}
+FORMAT_ATTENTION = {4: 'bidirectional_prefix'}
+MULTIMODAL_FORMATS = (3, 4)
 INPUTS = ('text', 'image', 'audio')
 LEGACY_MODEL_ID = 'saina-helm-0.8b'  # checkpoints from before releases named themselves
 MODEL_NAME = r'saina-helm(-[0-9]+)?(-[a-z]+)?-[0-9.]+b'
@@ -104,6 +108,9 @@ class SharedHeadScorer(FrozenHeadScorer):
         if not (root / 'model.safetensors').is_file() and not (root / 'model.safetensors.index.json').is_file():
             raise ValueError('Shared-pass checkpoints must ship merged backbone weights')
         super().__init__(path, device=device, max_length=max_length)
+        self.prompt_attention = config.get('prompt_attention', 'causal')
+        if self.prompt_attention not in PROMPT_ATTENTION_MODES:
+            raise ValueError('Unsupported prompt attention; upgrade the saina package')
         if config.get('head_type') == 'routed_residual_v1':
             from safetensors.torch import load_file
             from .routed import RoutedResidualHead
@@ -135,7 +142,9 @@ class SharedHeadScorer(FrozenHeadScorer):
         self.last_input_tokens = len(ids)
         ids = torch.tensor([list(ids)], device=self.device)
         # No per-request feature cache: a serving process must not retain customer text.
-        with torch.inference_mode(), torch.autocast('cuda', dtype=torch.bfloat16, enabled=ids.is_cuda):
+        prompt = shared_prompt_tokens(self.tokenizer, ids.shape[1], len(counts))
+        with torch.inference_mode(), torch.autocast('cuda', dtype=torch.bfloat16, enabled=ids.is_cuda), \
+                prompt_attention(self.prompt_attention, prompt):
             hidden = self.model.model(input_ids=ids, attention_mask=torch.ones_like(ids),
                 use_cache=False, return_dict=True).last_hidden_state[0]
             logits = self.head(hidden[positions]).float()
@@ -212,7 +221,9 @@ class MultimodalHeadScorer(SharedHeadScorer):
             raise ValueError('Image preprocessing does not match the encoded input')
         ids = torch.tensor([list(ids)], device=self.device)
         # No per-request feature cache: a serving process must not retain customer text or media.
-        with torch.inference_mode(), torch.autocast('cuda', dtype=torch.bfloat16, enabled=ids.is_cuda):
+        prompt = shared_prompt_tokens(self.tokenizer, ids.shape[1], len(counts))
+        with torch.inference_mode(), torch.autocast('cuda', dtype=torch.bfloat16, enabled=ids.is_cuda), \
+                prompt_attention(self.prompt_attention, prompt):
             hidden = self.model.model(
                 input_ids=ids, attention_mask=torch.ones_like(ids),
                 pixel_values=pixels['pixel_values'].to(self.device),
@@ -259,18 +270,21 @@ def checkpoint_format(path):
             raise ValueError('Conflicting checkpoint architecture metadata: ' + field)
     if FORMAT_PROMPTS.get(version) != (prompt if shared else None):
         raise ValueError('Checkpoint format does not match its prompt format')
+    attention = FORMAT_ATTENTION.get(version, 'causal')
+    if config.get('prompt_attention', 'causal') != attention or package.get('saina_prompt_attention', attention) != attention:
+        raise ValueError('Checkpoint format does not match its prompt attention')
     return version
 
 
 def checkpoint_inputs(path):
-    """Inputs a checkpoint was trained to read: always text; images and audio only for format 3."""
+    """Inputs a checkpoint was trained to read: always text; images and audio only for formats 3 and 4."""
     package = json.loads((path / 'config.json').read_text()) if (path / 'config.json').is_file() else {}
     inputs = package.get('saina_inputs', ['text'])
     if (not isinstance(inputs, list) or not inputs or inputs[0] != 'text' or len(set(inputs)) != len(inputs)
             or set(inputs) - set(INPUTS)):
         raise ValueError('Invalid saina_inputs in checkpoint config')
-    if len(inputs) > 1 and package.get('saina_checkpoint_format') != 3:
-        raise ValueError('Only format 3 checkpoints read images or audio')
+    if len(inputs) > 1 and package.get('saina_checkpoint_format') not in MULTIMODAL_FORMATS:
+        raise ValueError('Only format 3 and 4 checkpoints read images or audio')
     return tuple(inputs)
 
 
@@ -381,7 +395,7 @@ def load_scorer(checkpoint, revision=None, device='cpu', max_length=None):
     if (path / 'head-config.json').is_file():
         model_id, inputs = checkpoint_model_id(path), checkpoint_inputs(path)
         version = checkpoint_format(path)
-        if version == 3:
+        if version in MULTIMODAL_FORMATS:
             scorer = MultimodalHeadScorer(path, device=device, max_length=max_length, inputs=inputs)
         else:
             scorer = (SharedHeadScorer if version == 2 else FrozenHeadScorer)(path, device=device,

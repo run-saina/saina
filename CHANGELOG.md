@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.0
+
+- **Checkpoint format 4.** A format 4 checkpoint is a format 3 checkpoint (shared multimodal prompt, routed head,
+  text, image and audio inputs) whose prompt reads in both directions in the full-attention layers: every token
+  before the readout slots (the context, every question with its options, and any images or audio) attends to every
+  other prompt token. The readout slots stay causal, and so do the linear-attention layers. Its `config.json` sets
+  `saina_checkpoint_format: 4` and `saina_prompt_attention: "bidirectional_prefix"`; `head-config.json` sets
+  `prompt_attention`. Earlier saina versions refuse format 4 checkpoints, and this version refuses a prompt
+  attention it does not know. Format 4 checkpoints serve, count tokens and accept images and audio exactly as
+  format 3 does.
+- **Saina Helm 3 (Preview)**, `saina-helm-3-0.8b`: a native multimodal decision model, shipped as a format 4
+  checkpoint (`run-saina/saina-helm-3-0.8b`). `/v1/models` lists it by name when served.
+- `TokenCounter.from_checkpoint` checks the checkpoint format and refuses formats this version does not know.
+
 ## 0.7.0 (unreleased)
 
 - **`POST /v1/decisions`** (and the alias `/api/v1/decisions`) accepts two request shapes, told apart by the body:

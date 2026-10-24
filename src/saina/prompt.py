@@ -122,6 +122,11 @@ def shared_positions(tokenizer, length, count):
     return positions
 
 
+def shared_prompt_tokens(tokenizer, length, count):
+    """Tokens of a shared input before its `count` readout slots: the prompt that format 4 reads both ways."""
+    return length - sum(len(_slot(tokenizer, i)) for i in range(count))
+
+
 def encode(prompt_format, tokenizer, codes, context, question, choices, max_length, mode='single_label'):
     """Token IDs of the exact model input for one question."""
     if prompt_format in SHARED_PROMPTS:
