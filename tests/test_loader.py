@@ -297,6 +297,61 @@ class PromptAttentionTests(unittest.TestCase):
                 pass
 
 
+@unittest.skipIf(torch is None, 'requires the local extras (torch, transformers)')
+class PrefixAttentionTests(unittest.TestCase):
+    """The two-part attention equals attention under the dense bidirectional-prefix mask."""
+
+    @staticmethod
+    def dense(query, key, value, prompt, scaling):
+        groups = query.shape[1] // key.shape[1]
+        key, value = key.repeat_interleave(groups, 1), value.repeat_interleave(groups, 1)
+        n = query.shape[2]
+        rows, cols = torch.arange(n)[:, None], torch.arange(n)[None, :]
+        allowed = (cols <= rows) | ((rows < prompt) & (cols < prompt))
+        scores = (query @ key.transpose(-1, -2) * scaling).masked_fill(~allowed, float('-inf'))
+        return (scores.softmax(-1) @ value).transpose(1, 2)
+
+    def test_matches_dense_mask_with_grouped_heads(self):
+        from saina.attention import prefix_attention
+        torch.manual_seed(0)
+        for heads, kv_heads in ((4, 2), (6, 1), (2, 2)):
+            query = torch.randn(2, heads, 11, 8, dtype=torch.float64)
+            key, value = (torch.randn(2, kv_heads, 11, 8, dtype=torch.float64) for _ in range(2))
+            for prompt in (0, 1, 7, 10, 11):
+                got = prefix_attention(query, key, value, prompt, 0.3)
+                self.assertEqual(got.shape, (2, 11, heads, 8))
+                torch.testing.assert_close(got, self.dense(query, key, value, prompt, 0.3), rtol=1e-10, atol=1e-10)
+
+    def test_model_matches_dense_mask_path(self):
+        from transformers import Qwen3_5TextConfig
+        from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextModel
+        from saina import attention
+        hidden = {}
+        for implementation in ('sdpa', 'eager'):
+            config = Qwen3_5TextConfig(vocab_size=64, hidden_size=64, intermediate_size=64, num_hidden_layers=2,
+                                       num_attention_heads=4, num_key_value_heads=2, head_dim=16,
+                                       layer_types=['full_attention', 'full_attention'])
+            config._attn_implementation = implementation
+            torch.manual_seed(0)
+            model = Qwen3_5TextModel(config).eval().double()
+            ids = torch.randint(0, 64, (1, 12))
+            calls = []
+            original = attention.prefix_attention
+
+            def spy(*args, **kwargs):
+                calls.append(args[3])
+                return original(*args, **kwargs)
+
+            with torch.no_grad(), attention.prompt_attention('bidirectional_prefix', 9), \
+                    patch.object(attention, 'prefix_attention', spy):
+                hidden[implementation] = model(input_ids=ids,
+                                               attention_mask=torch.ones_like(ids)).last_hidden_state[0]
+            # sdpa takes the two-part path; eager materialises masks and keeps the dense-mask path.
+            self.assertEqual(calls, [9, 9] if implementation == 'sdpa' else [])
+        # Eager takes its softmax in float32.
+        torch.testing.assert_close(hidden['sdpa'], hidden['eager'], rtol=1e-5, atol=1e-5)
+
+
 class SharedPromptTests(unittest.TestCase):
     def test_slots_follow_all_questions_and_limit_is_enforced(self):
         from saina.errors import InputTooLong
