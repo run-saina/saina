@@ -8,7 +8,7 @@ Their training data was limited to permissively licensed sources.
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/run-saina/saina/blob/main/examples/saina_colab.ipynb)
 Models: [Helm 2 0.8B](https://huggingface.co/run-saina/saina-helm-2-0.8b) (current),
-[Helm 3 0.8B](https://huggingface.co/run-saina/saina-helm-3-0.8b) (Preview, a native multimodal decision model)
+[Helm 3 0.8B](https://huggingface.co/run-saina/saina-helm-3-0.8b) (a native multimodal decision model)
 and the original [Helm 0.8B](https://huggingface.co/run-saina/saina-helm-0.8b). Try Helm in
 [`examples/saina_colab.ipynb`](examples/saina_colab.ipynb), run the weights locally through the SDK,
 or call [Replicate](https://replicate.com/run-saina/saina-helm-2-0.8b) or your own endpoint.

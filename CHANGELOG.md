@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.2
+
+- **Saina Helm 3 release pin and name.** The built-in `saina-helm-3-0.8b` local release now pins the final Helm 3
+  weights (`run-saina/saina-helm-3-0.8b@bcc9d791ff361b034da2a2b616c1440f90300505`), and the pin lists every file the
+  checkpoint manifest checks, so a fresh download verifies and loads. `/v1/models` and the console name it
+  `Saina: Helm 3 0.8B` and `Helm 3`, without the Preview label.
+
 ## 0.9.1
 
 - **Memory-light format 4 attention.** The bidirectional prompt attention of format 4 checkpoints no longer builds a

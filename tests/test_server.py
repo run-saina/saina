@@ -163,12 +163,12 @@ class ModelNameTests(unittest.TestCase):
             self.assertEqual(r.json()['model'], 'saina-helm-2-0.8b')
             self.assertTrue(m['description'].startswith('Saina Helm is an open 0.8B decision model'))
 
-    def test_listing_names_helm_3_preview(self):
+    def test_listing_names_helm_3(self):
         helm3 = SharedFakeScorer(); helm3.model_id = 'saina-helm-3-0.8b'
         with TestClient(create_app(scorer=helm3, api_key='k')) as c:
             m = c.get('/v1/models').json()['data'][0]
         self.assertEqual((m['id'], m['name'], m['hugging_face_id']),
-                         ('saina-helm-3-0.8b', 'Saina: Helm 3 0.8B (Preview)', 'run-saina/saina-helm-3-0.8b'))
+                         ('saina-helm-3-0.8b', 'Saina: Helm 3 0.8B', 'run-saina/saina-helm-3-0.8b'))
         self.assertIn('native multimodal decision model', m['description'])
 
 
