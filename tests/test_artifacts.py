@@ -103,3 +103,45 @@ def test_module_entrypoint_needs_no_site_packages(bundle):
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)['status'] == 'integrity_verified'
+
+
+@pytest.mark.parametrize('name', ['README.md', 'VERSIONS.md'])
+def test_documentation_mismatch_or_absence_does_not_fail(bundle, name):
+    root, mapping = bundle
+    (root / 'artifact-manifest.json').write_text(json.dumps({**mapping, name: 'b' * 64}))
+    assert verify_artifacts(root, required=['head.safetensors']) == mapping
+    (root / name).write_text('edited after packaging')
+    assert verify_artifacts(root, required=['head.safetensors']) == mapping
+
+
+def test_model_file_mismatch_still_fails_beside_documentation(bundle):
+    root, mapping = bundle
+    (root / 'README.md').write_text('card')
+    (root / 'artifact-manifest.json').write_text(json.dumps({
+        **mapping, 'README.md': hashlib.sha256(b'card').hexdigest(), 'VERSIONS.md': 'c' * 64}))
+    (root / 'merged-hf/tokenizer.json').write_bytes(b'changed')
+    with pytest.raises(ArtifactError, match='hash mismatch: merged-hf/tokenizer.json'):
+        verify_artifacts(root)
+
+
+def _load_native(root, monkeypatch):
+    import saina.loader
+    from saina.backends import load_backend
+    monkeypatch.setattr(saina.loader, 'staged', lambda checkpoint, revision=None: Path(checkpoint))
+    monkeypatch.setattr(saina.loader, 'load_scorer', lambda checkpoint, **k: ('scorer', checkpoint))
+    return load_backend(str(root), 'native')
+
+
+def test_loading_survives_edited_documentation(bundle, monkeypatch):
+    root, mapping = bundle
+    (root / 'README.md').write_text('card edited after packaging')
+    (root / 'artifact-manifest.json').write_text(json.dumps({**mapping, 'README.md': 'd' * 64, 'VERSIONS.md': 'e' * 64}))
+    assert _load_native(root, monkeypatch) == ('scorer', str(root))
+
+
+def test_loading_refuses_a_changed_model_file(bundle, monkeypatch):
+    root, mapping = bundle
+    (root / 'artifact-manifest.json').write_text(json.dumps({**mapping, 'README.md': 'd' * 64}))
+    (root / 'head.safetensors').write_bytes(b'other head')
+    with pytest.raises(ArtifactError, match='hash mismatch: head.safetensors'):
+        _load_native(root, monkeypatch)

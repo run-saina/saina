@@ -1,0 +1,71 @@
+{
+  "helm/native": {
+    "repo": "run-saina/saina-helm-0.8b",
+    "revision": "e82055b348d02bb43552ccba88eda24835ba6baf",
+    "artifact_manifest": null
+  },
+  "helm/mlx": {
+    "repo": "run-saina/saina-helm-0.8b-MLX",
+    "revision": "c1c92381baa9dc0e831a94214313e3e3c44e3348",
+    "artifact_manifest": null
+  },
+  "helm2/native": {
+    "repo": "run-saina/saina-helm-2-0.8b",
+    "revision": "a00e9cda8c5f26d5d403adf9440128d7e85e4251",
+    "artifact_manifest": {
+      "README.md": "09bb9bf94bdde02f826e3a1f414cd114596bf29e07c85b7ba227edddef6f0e93",
+      "chat_template.jinja": "273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80",
+      "config.json": "14a0b3157aad3e29fabaa502f21192430cf28f3085ff7955af22f4f2b6fc14b8",
+      "experts.safetensors": "b3ebd03846044f4b281691617a21a6b6c3bbb78e938f86fc2217b7730d9582ab",
+      "generation_config.json": "d0bb1d295ae3e46bb02d6d1a4dc59d689ec822d7479a32835f6945db85c3512a",
+      "head-config.json": "ca64b545381131ccf1fd8df0ff4dc51cca6ab2c8427b35d3de9b2f421ea7a37b",
+      "head.safetensors": "846df3fe44256a54a61557634992d8cefbfe47bb773a87e9948a8aeecdcacd93",
+      "merge-provenance.json": "1c5dbc7a908e8cf3961b4a3fe3c849ab214f1b368ac5b55e1940218bfb1abdcf",
+      "model.safetensors": "e9205b34700a0e9c536cf3e475141c2c31e9f657b4a982e779718e03c7cca7ed",
+      "tokenizer.json": "a5cd9732badce41de57e6efce8302930ded1c1188c5f81feb2bd6c24c4a1941f",
+      "tokenizer_config.json": "54c84a6b3f5b751ce34e760fcc75521f2f5092904fbc4380d54aa8910b416fbb"
+    }
+  },
+  "helm2-omni/native": {
+    "repo": "run-saina/saina-helm-2-omni-0.8b",
+    "revision": "d7ee0a54214d4acaaddd6e8225d8f92b40795b33",
+    "artifact_manifest": {
+      "README.md": "e19dde86262204ff4ccb8db73fb663f557e9457b207b86b0a46923930ccf29d3",
+      "VERSIONS.md": "1068124287974d6f7a6bd3190c8ef5a67e1b8893d2cd24f68d09ed5e32c56a06",
+      "chat_template.jinja": "273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80",
+      "config.json": "35d867ec7f16fed40b8008da3d69c5fc76a24c63a185a39b8406d04419f04ecb",
+      "experts.safetensors": "aa24879b2b1e92ca4e9ae1b56d64c46326c68d1546761b8d807defcbbdee619c",
+      "generation_config.json": "d0bb1d295ae3e46bb02d6d1a4dc59d689ec822d7479a32835f6945db85c3512a",
+      "head-config.json": "5fd328220c8484be0838350ac030d0918c539a7b12defeaa6055848f3a4728a2",
+      "head.safetensors": "a37ab1fe888338ab4b4db59a427b65ac2bdcd0dbe44507af14a14d2d1d664c26",
+      "merge-provenance.json": "4e6d8c32f59c31e4d06bc9610301fee835a12f0cb7de94488defa72dd122352d",
+      "model.safetensors": "015f71c53df27f8c97ed94b242504dcf1e96a1583c46987fc3ac7f9198f11739",
+      "preprocessor_config.json": "3a159dfec9978a186a72ba085e0ad6a050f3968d8b364218d7bd13f5c89381f2",
+      "tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+      "tokenizer_config.json": "49e2b6e395f959f077f1e992b338919c0d4a9732fc6e613995e06557f843500c"
+    }
+  },
+  "helm3/native": {
+    "repo": "run-saina/saina-helm-3-0.8b",
+    "revision": "bcc9d791ff361b034da2a2b616c1440f90300505",
+    "artifact_manifest": {
+      "README.md": "2ae4e9ee53522b305eb38f5afa94f76b9de2f386f28f68fe0475733767a04806",
+      "VERSIONS.md": "87322d9b0bba71f39ebb139201b2871df1fcf8cb9b4376ecbd36796043a795ab",
+      "chat_template.jinja": "273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80",
+      "config.json": "a433ba078f1485b6ac10040a53e361dd626c4d5f6767cf8a2a67e3a43c55bbe7",
+      "experts.safetensors": "3a908cf4bf2844cf6073c3949e32fe6262fd65ffab8e162864571bb029361173",
+      "generation_config.json": "d0bb1d295ae3e46bb02d6d1a4dc59d689ec822d7479a32835f6945db85c3512a",
+      "head-config.json": "83667b8c9a3344b100662b32046abb39f52e80d9a7b0db882e065c44b25a2b46",
+      "head.safetensors": "9bbcca38b8271f0bde79ee8b5e6c96e4a99b4591242ced208117ee6080ce1297",
+      "model.safetensors": "a46e6e0ba92a3e869d2fe13b7af963a31340c39c1da3a99ee2566b4b54cf796f",
+      "preprocessor_config.json": "3a159dfec9978a186a72ba085e0ad6a050f3968d8b364218d7bd13f5c89381f2",
+      "tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+      "tokenizer_config.json": "49e2b6e395f959f077f1e992b338919c0d4a9732fc6e613995e06557f843500c"
+    }
+  },
+  "helm2-routing/native": {
+    "repo": "run-saina/saina-helm-2-routing-0.8b",
+    "revision": "6c99c8cdd87d0cfd2ecfb05650bb25b803b863fd",
+    "artifact_manifest": null
+  }
+}
