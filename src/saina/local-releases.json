@@ -188,11 +188,19 @@
   "helm3": {
     "native": {
       "repo": "run-saina/saina-helm-3-0.8b",
-      "revision": "5529b6ae68055eea269437123411fdc799d1894e",
+      "revision": "bcc9d791ff361b034da2a2b616c1440f90300505",
       "files": {
+        "README.md": {
+          "size": 5172,
+          "sha256": "2ae4e9ee53522b305eb38f5afa94f76b9de2f386f28f68fe0475733767a04806"
+        },
+        "VERSIONS.md": {
+          "size": 267,
+          "sha256": "87322d9b0bba71f39ebb139201b2871df1fcf8cb9b4376ecbd36796043a795ab"
+        },
         "artifact-manifest.json": {
-          "size": 1185,
-          "sha256": "7fd8e1eb8dfab4141bc7c5684c7e4a65fc3ac7d6de06779cae16fd0e5a7a68c0"
+          "size": 1090,
+          "sha256": "05f2b25dd604b22bb2cc91f677f353fa64c9d6529c8bcf60e61bec28aa11e2ab"
         },
         "chat_template.jinja": {
           "size": 7755,
@@ -204,27 +212,23 @@
         },
         "experts.safetensors": {
           "size": 9085440,
-          "sha256": "558b2761a4cebd3dd39e72bbf68f001882b8ba2ac81b3d21de4d5df4b192c3e4"
+          "sha256": "3a908cf4bf2844cf6073c3949e32fe6262fd65ffab8e162864571bb029361173"
         },
         "generation_config.json": {
           "size": 116,
           "sha256": "d0bb1d295ae3e46bb02d6d1a4dc59d689ec822d7479a32835f6945db85c3512a"
         },
         "head-config.json": {
-          "size": 13119,
-          "sha256": "d9fd3cee467668f472ed7de0d7f3ef857e7c443a4917dfd6935b822668505ccd"
+          "size": 10528,
+          "sha256": "83667b8c9a3344b100662b32046abb39f52e80d9a7b0db882e065c44b25a2b46"
         },
         "head.safetensors": {
           "size": 2408560,
-          "sha256": "fbf8c17c37a5a9b7908f2304d787ed262144fa15aebb35ec6636a9ca86318d82"
-        },
-        "merge-provenance.json": {
-          "size": 718,
-          "sha256": "4c8cd1e72d4b2ad268e2ec2a4c6a0c5cb8e2f7d73f954bb52bc10944ef77799d"
+          "sha256": "9bbcca38b8271f0bde79ee8b5e6c96e4a99b4591242ced208117ee6080ce1297"
         },
         "model.safetensors": {
           "size": 1706030528,
-          "sha256": "d3d50e46b18bc331d7301403338f89707b9fd5553a4f1069960ae02f3935851a"
+          "sha256": "a46e6e0ba92a3e869d2fe13b7af963a31340c39c1da3a99ee2566b4b54cf796f"
         },
         "preprocessor_config.json": {
           "size": 443,

@@ -198,9 +198,9 @@ CATALOG = {
                           'hugging_face_id': 'run-saina/saina-helm-2-0.8b'},
     'saina-helm-2-omni-0.8b': {'name': 'Saina: Helm 2 Omni 0.8B', 'created': 1792022400,
                                'hugging_face_id': 'run-saina/saina-helm-2-omni-0.8b'},
-    'saina-helm-3-0.8b': {'name': 'Saina: Helm 3 0.8B (Preview)', 'created': 1792800000,
+    'saina-helm-3-0.8b': {'name': 'Saina: Helm 3 0.8B', 'created': 1792800000,
                           'hugging_face_id': 'run-saina/saina-helm-3-0.8b',
-                          'description': ('Saina Helm 3 (Preview) is a native multimodal decision model. It reads a '
+                          'description': ('Saina Helm 3 is a native multimodal decision model. It reads a '
                                           'state with text, images and audio and answers typed questions (noul, '
                                           'choice, score) with a probability for every option, instead of '
                                           'generating text.')},
