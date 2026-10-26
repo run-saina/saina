@@ -65,3 +65,49 @@ def test_model_selection(cached,interactive,answer,expected,monkeypatch):
     else:
         with pytest.raises(ValueError,match='non-interactive'): r.choose_release('native',interactive=False)
     assert r.choose_release('native','two',interactive=False)['key']=='two'
+
+
+RECORDED_MANIFESTS = Path(__file__).parent / 'fixtures' / 'release-manifests.json'
+
+
+def _pins():
+    import json
+    import saina
+    releases = json.loads((Path(saina.__file__).parent / 'local-releases.json').read_text())
+    return {f'{key}/{backend}': release for key, variants in releases.items() for backend, release in variants.items()}
+
+
+def test_every_pin_covers_its_recorded_manifest():
+    # Loading verifies the checkpoint's artifact-manifest.json, so a pin must download every file that manifest
+    # checks. The record holds each pinned revision's manifest; re-record it whenever a pin changes
+    # (SAINA_TEST_NETWORK=1 compares the record with the Hub).
+    import json
+    from saina.artifacts import DOCUMENTATION_FILES
+    recorded = json.loads(RECORDED_MANIFESTS.read_text())
+    pins = _pins()
+    assert set(recorded) == set(pins)
+    for name, pin in pins.items():
+        entry = recorded[name]
+        assert (entry['repo'], entry['revision']) == (pin['repo'], pin['revision']), f'{name}: re-record the manifest'
+        manifest = entry['artifact_manifest']
+        assert ('artifact-manifest.json' in pin['files']) == (manifest is not None), name
+        for file, digest in (manifest or {}).items():
+            if file in DOCUMENTATION_FILES:
+                continue
+            assert file in pin['files'], f'{name}: pin misses manifest file {file}'
+            assert pin['files'][file]['sha256'] == digest, f'{name}: {file} hash differs from the manifest'
+
+
+@pytest.mark.skipif(not __import__('os').environ.get('SAINA_TEST_NETWORK'), reason='set SAINA_TEST_NETWORK=1 to read the Hub')
+def test_recorded_manifests_match_the_hub():
+    import json
+    from huggingface_hub import HfApi, hf_hub_download
+    recorded = json.loads(RECORDED_MANIFESTS.read_text())
+    for name, pin in _pins().items():
+        files = {s.rfilename for s in HfApi().model_info(pin['repo'], revision=pin['revision']).siblings}
+        manifest = None
+        if 'artifact-manifest.json' in files:
+            path = Path(hf_hub_download(pin['repo'], 'artifact-manifest.json', revision=pin['revision']))
+            assert hashlib.sha256(path.read_bytes()).hexdigest() == pin['files']['artifact-manifest.json']['sha256'], name
+            manifest = json.loads(path.read_text())
+        assert recorded[name]['artifact_manifest'] == manifest, name

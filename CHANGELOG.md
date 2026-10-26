@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.3
+
+- **Model loading no longer fails when a release's card or version notes were edited after packaging.** The
+  checkpoint manifest check (on every load, from a built-in release or a plain repo id, and in `saina doctor`) skips
+  `README.md` and `VERSIONS.md`, whether they are missing or changed. Every other file the manifest lists is still
+  checked strictly. This fixes clean-cache loads of the built-in `saina-helm-2-0.8b` and `saina-helm-2-omni-0.8b`
+  releases. A new test checks that every built-in release pin covers the files its manifest checks.
+
 ## 0.9.2
 
 - **Saina Helm 3 release pin and name.** The built-in `saina-helm-3-0.8b` local release now pins the final Helm 3

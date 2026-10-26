@@ -32,7 +32,8 @@ PYTHONPATH=src python3 -m saina doctor --checkpoint /path/to/checkpoint --json
 ```
 
 After installing this checkout, the same command is available as `saina doctor`.
-It checks every file in `artifact-manifest.json` and requires the trained
+It checks every file in `artifact-manifest.json` except the model card and version notes
+(`README.md`, `VERSIONS.md`), which loading skips as well, and requires the trained
 `head.safetensors` and `head-config.json` to be listed. Missing manifests, omitted
 required files and checksum mismatches exit with status 1. Use `--require FILE`
 repeatedly for additional backend assets. For an experimental GGUF bundle, pass

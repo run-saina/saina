@@ -13,6 +13,11 @@ class ArtifactError(ValueError):
     """A bundle cannot be verified against its manifest."""
 
 
+# Model cards and version notes describe a release; they never change what the model computes, and they are
+# often edited after a release is packaged. Manifest checks skip them (present or not); every other file is checked.
+DOCUMENTATION_FILES = frozenset({'README.md', 'VERSIONS.md'})
+
+
 def _object(pairs):
     result = {}
     for key, value in pairs:
@@ -37,6 +42,7 @@ def verify_artifacts(root, *, manifest='artifact-manifest.json', required=()):
 
     Accept the native flat mapping or the GGUF mapping under ``files``. Callers
     must supply the assets their backend requires; an omitted asset is an error.
+    Documentation files (``DOCUMENTATION_FILES``) are not checked.
     This function does not download, repair, execute, or rewrite anything.
     """
     root = Path(root)
@@ -46,6 +52,8 @@ def verify_artifacts(root, *, manifest='artifact-manifest.json', required=()):
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ArtifactError(f'Cannot read manifest {manifest}: {exc}') from exc
     files = data.get('files', data) if isinstance(data, dict) else None
+    if isinstance(files, dict):
+        files = {name: digest for name, digest in files.items() if name not in DOCUMENTATION_FILES}
     return verify_files(root, files, required=required)
 
 
