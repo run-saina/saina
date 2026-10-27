@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.2 / TypeScript 0.5.2
+
+- Support eventually consistent native capture by retrying temporary not-found responses when reporting outcomes.
+- Document post-response native capture, bounded background delivery, loss behavior and external flush semantics.
+
 ## 0.10.1 / TypeScript 0.5.1
 
 - Reuse a bounded pool of HTTP connections for Python trace delivery and endpoint invocation.

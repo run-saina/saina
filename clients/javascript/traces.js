@@ -92,7 +92,7 @@ export class TraceClient {
       catch (deliveryError) { this.#notify(deliveryError); }
     }
   }
-  async #post(path, body, retry = true) {
+  async #post(path, body, retry = true, retryNotFound = false) {
     const payload = JSON.stringify(body), attempts = retry ? this.maxRetries : 0;
     for (let attempt = 0; ; attempt++) {
       let delay = Math.min(250 * 2 ** attempt, 5000), transient = true, error;
@@ -116,7 +116,7 @@ export class TraceClient {
         let value; try { value = JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(data)); } catch { value = null; }
         if (response.ok && value && typeof value === 'object') return value;
         error = new TraceDeliveryError('Saina trace request failed', {status: response.status, code: value?.error?.code});
-        transient = response.ok || [408, 429, 500, 502, 503, 504].includes(response.status);
+        transient = response.ok || [408, 429, 500, 502, 503, 504].includes(response.status) || retryNotFound && response.status === 404;
         const after = response.headers.get('Retry-After');
         if (after !== null && Number.isFinite(Number(after))) delay = Math.min(30000, Math.max(0, Number(after) * 1000));
       } catch (caught) { error = caught instanceof TraceDeliveryError ? caught : new TraceDeliveryError('Saina trace connection or response failed'); }
@@ -152,7 +152,7 @@ export class TraceClient {
     this.#checkOpen();
     await this.flush();
     return this.#post('/v1/studio/data/collections/' + encodeURIComponent(this.collection) + '/traces/' + encodeURIComponent(identifier(decisionId)) + '/outcomes',
-      {source: this.source, event_id: identifier(eventId), values: snapshot(values)});
+      {source: this.source, event_id: identifier(eventId), values: snapshot(values)}, true, true);
   }
   async invokeEndpoint(endpoint, request, {version = 'production'} = {}) {
     this.#checkOpen();

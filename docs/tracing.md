@@ -99,9 +99,21 @@ traces. Browser capture uses memory only, with no localStorage or IndexedDB writ
 
 ## Call a Saina Decision Endpoint
 
-Calling an endpoint is an explicit inference operation. The backend captures it once
-in the configured collection; do not wrap this call in an extra external trace scope.
+Calling an endpoint is an explicit inference operation. The proxy returns the answer
+without waiting for trace storage. Native evidence is captured asynchronously into
+the configured collection; do not wrap this call in an extra external trace scope.
 The result includes the native `decision_id` and `collection_id`.
+
+Native evidence and observability are eventually consistent. A response does not
+acknowledge durable trace storage: a crash before persistence, queue exhaustion or
+exhausted storage retries can lose evidence. Gateway metrics expose persisted and
+dropped trace counts, queued jobs and pending bytes. Graceful shutdown drains pending
+work within the shutdown deadline. Each persisted trace uses its original decision
+ID, so background retries do not duplicate evidence or repeat inference.
+
+Outcome reporting retries temporary not-found responses while native evidence is
+being persisted. If retries are exhausted, retry the outcome with the same event ID.
+`flush()` on the client waits for external SDK captures, not the server's native queue.
 
 ```python
 decision = traces.invoke_endpoint(

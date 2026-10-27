@@ -8,7 +8,7 @@ async function fixture(t, options = {}) {
   const server = createServer(async (req, res) => {
     const chunks=[]; for await (const chunk of req) chunks.push(chunk);
     const body=JSON.parse(Buffer.concat(chunks));requests.push({path:req.url,body,authorization:req.headers.authorization});
-    if (failure) {failure--;res.writeHead(503,{'Content-Type':'application/json','Retry-After':'0'});res.end(JSON.stringify({error:{code:'overloaded'}}));return;}
+    if (failure) {failure--;res.writeHead(options.failureStatus??503,{'Content-Type':'application/json','Retry-After':'0'});res.end(JSON.stringify({error:{code:'overloaded'}}));return;}
     res.writeHead(201,{'Content-Type':'application/json'});
     res.end(JSON.stringify(body.traces ? {decision_ids:badAck ? [] : body.traces.map(r=>r.decision_id)} : req.url.endsWith('/decide') ? {decision_id:'native',collection_id:'support'} : {id:'outcome'}));
   });
@@ -95,4 +95,13 @@ test('failed full batches wait before background redelivery instead of spinning'
   assert.equal(errors.length,1);await new Promise(resolve=>setTimeout(resolve,30));
   assert.equal(requests.length,1);assert.equal(client.pendingCount,1);
   fail(0);await client.close();assert.equal(client.pendingCount,0);
+});
+
+test('immediate native outcomes retry temporary missing evidence without invoking again',async t=>{
+  const {client,requests,fail}=await fixture(t,{failureStatus:404});
+  const decision=await client.invokeEndpoint('support-triage',{state:'Ticket'});
+  fail(1);await client.reportOutcome(decision.decision_id,{eventId:'resolved',values:{resolved:true}});
+  assert.equal(requests.filter(r=>r.path.endsWith('/decide')).length,1);
+  const outcomes=requests.filter(r=>r.path.endsWith('/outcomes'));
+  assert.equal(outcomes.length,2);assert.deepEqual(outcomes[0].body,outcomes[1].body);
 });

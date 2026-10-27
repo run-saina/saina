@@ -161,3 +161,22 @@ class TraceCapture(unittest.TestCase):
             self.assertEqual(error.exception.status,403);self.assertEqual(len(requests),2)
             client.close()
         finally:server.shutdown();server.server_close();thread.join()
+
+    def test_native_outcome_retries_temporary_missing_evidence_without_reinvoking(self):
+        requests=[]
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_POST(self):
+                body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                requests.append((self.path,body))
+                status=404 if len(requests)==2 else 200
+                data=json.dumps({'decision_id':'native'} if self.path.endswith('/decide') else {'id':'outcome'}).encode()
+                self.send_response(status);self.send_header('Content-Length',str(len(data)));self.send_header('Retry-After','0');self.end_headers();self.wfile.write(data)
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        client=self.client(base_url='http://127.0.0.1:'+str(server.server_port))
+        try:
+            decision=client.invoke_endpoint('support-triage',{'state':'Ticket'})
+            client.report_outcome(decision['decision_id'],values={'resolved':True},event_id='resolved')
+            self.assertEqual(sum(p.endswith('/decide') for p,b in requests),1)
+            self.assertEqual(requests[1],requests[2]);client.close()
+        finally:server.shutdown();server.server_close();thread.join()

@@ -221,7 +221,7 @@ class TraceClient:
                     connection.close()
             self._slots.release()
 
-    def _post(self, path, body, *, retry=True):
+    def _post(self, path, body, *, retry=True, retry_not_found=False):
         data = json.dumps(body, allow_nan=False, ensure_ascii=False, separators=(',', ':')).encode()
         headers = {'Content-Type': 'application/json', 'X-Saina-Client': 'python-sdk'}
         if self._api_key:
@@ -240,7 +240,7 @@ class TraceClient:
                     return value
                 code = value.get('error',{}).get('code') if isinstance(value,dict) else None
                 error = TraceDeliveryError('Saina trace request failed',status=status,code=code)
-                transient = status in (408,429,500,502,503,504)
+                transient = status in (408,429,500,502,503,504) or retry_not_found and status==404
                 try:
                     delay=min(30,max(0,float(response_headers.get('retry-after',delay))))
                 except (ValueError,TypeError):
@@ -252,7 +252,7 @@ class TraceClient:
                 except (ValueError, AttributeError):
                     pass
                 error = TraceDeliveryError('Saina trace request failed', status=exc.code, code=code)
-                transient = exc.code in (408, 429, 500, 502, 503, 504)
+                transient = exc.code in (408, 429, 500, 502, 503, 504) or retry_not_found and exc.code==404
                 try:
                     delay = min(30, max(0, float(exc.headers.get('Retry-After', delay))))
                 except (ValueError, TypeError):
@@ -344,7 +344,7 @@ class TraceClient:
         self._check_open()
         self.flush()
         return self._post('/v1/studio/data/collections/'+quote(self.collection, safe='')+'/traces/'+quote(_id(decision_id), safe='')+'/outcomes',
-                          {'source': self.source, 'event_id': _id(event_id), 'values': _snapshot(values)})
+                          {'source': self.source, 'event_id': _id(event_id), 'values': _snapshot(values)}, retry_not_found=True)
 
     async def areport_outcome(self, decision_id, *, values, event_id):
         return await asyncio.to_thread(self.report_outcome, decision_id, values=values, event_id=event_id)
