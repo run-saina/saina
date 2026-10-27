@@ -53,10 +53,12 @@ A text-only model refuses images and audio with `InvalidRequest`; `videos` are n
 
 ## Idempotency and retries
 
-Inference (`ask`, `systemOne`) is retried automatically only when the call carries an `Idempotency-Key`:
-pass `{idempotencyKey: newIdempotencyKey()}` as the second argument, or construct the client with
-`autoIdempotencyKey: true`. Every retry of one call reuses that key and the identical body, so a retry
-never runs or charges twice; the client never generates a new key for a retry.
+Inference (`ask`, `systemOne`, `decisions`, and their metadata variants) is retried automatically only when the call carries an `Idempotency-Key`:
+one UUIDv7 key is generated per logical call by default. Pass `{idempotencyKey: newIdempotencyKey()}`
+as the second argument to supply your own key. Set `autoIdempotencyKey: false` to disable generation;
+inference then retries only with an explicit key. Retries reuse the key and identical bytes. Protection
+against duplicate execution and billing requires server-side idempotency support; see
+[server compatibility](../../MIGRATION.md).
 
 Retries (`maxRetries`, default 2; total wait capped by `maxRetryDelay`, default 30000 ms) happen only on
 connection loss or an uncertain response, `accounting_unavailable`, `request_in_progress`, `rate_limited`,
@@ -85,12 +87,68 @@ await client.requests({limit: 50, status: 'settled'});
 
 Credit amounts are 64-bit integers sent as decimal strings; the client parses every credit field
 (`balance`, `reserved`, `available`, `overdraft_allowance`, `debt`, `credits`, `credits_charged`,
-`balance_after`) to `BigInt` and never through a JavaScript number. `ask` still returns the same response
-object as before; `client.lastMetadata` holds the metadata of the last inference call.
+`balance_after`) to `BigInt` and never through a JavaScript number. Native `ask()` returns typed answers;
+`client.lastMetadata` remains a compatibility property. Prefer `result.metadata` for concurrent calls.
 
 This client calls an existing endpoint; it does not run weights in JavaScript.
 Apache-2.0. Saina is operated by Rama Labs Inc.
 
+
+Response envelopes expose `.metadata` and the original wire response in `.raw`. Parsed credit fields
+are `BigInt`; `toObject()` and `toJSON()` serialize them as decimal strings.
+`JSON.stringify(result)` uses the same representation. `stringifyCredits(value)` also serializes account
+results containing `BigInt`. Python serializes credits as JSON integers; ordinary JavaScript number
+parsing cannot round-trip arbitrary Python credit amounts without precision loss.
+
+Question-level and top-level `extra` objects are flattened into outgoing fields. Collisions with known
+fields throw `TypeError` before network I/O. Options may be dictionaries or lists of strings.
+Errors inherit broad categories such as `AuthenticationError`, `RateLimitError`, `IdempotencyError`,
+`ServerError`, and `ModelBusyError`. `.fields` preserves all server error fields, including unknown ones.
+`SainaHelmError` is exactly `SainaError`; `SainaConnectionError` is exactly `TransportError`.
+
+
+## Typed answers and local selection
+
+`new Saina()` resolves `SAINA_API_KEY`, `SAINA_BASE_URL`, and `SAINA_TIMEOUT` at construction. Explicit
+arguments win. Environment timeout is in seconds; the constructor's `timeout` remains in milliseconds.
+Non-loopback HTTP requires `allowHttp: true`.
+
+```js
+const selections = result.select({threshold: 0.9, minMargin: 0.1});
+const issue = selections.issue;
+if (issue.accepted) {
+  console.log(issue.value);
+}
+```
+
+`result.answers.issue` is an immutable typed answer and also supports `.select()`. Selection is synchronous
+and makes no network calls. `.accepted` distinguishes accepted false/zero values from rejection. Rating
+probability keys are numeric indices; rating selections expose `.label`. Multi-choice preserves option
+order and returns `no_options_selected` if nothing qualifies. Threshold checks precede ties and margins;
+margin is ignored for rating and multi-choice.
+
+Native `ask()` always requests distributions. Move unknown ordinary fields into `extra`, and replace
+`mode: 'decision'` and server thresholds with local selection. Responses require a body `request_id` or
+`X-Request-Id` header; if both exist, they must agree. Metadata is bound to each result for concurrent code.
+System One and Decisions compatibility methods retain their wire-shaped results.
+
+## Durable external logs (Node.js 22.13+)
+
+```js
+import {Traces} from '@run-saina/sdk';
+const traces = new Traces({onStorageError: 'warn'});
+const id = await traces.log({task: 'route ticket', inputs: {ticket: 'Charged twice'}, outcome: null});
+const delivery = await traces.flush({timeout: 5});
+await traces.close({timeout: 5});
+```
+
+A returned ID acknowledges local SQLite persistence. `await traces.pending` counts unacknowledged
+records including quarantine. Storage errors during admission warn once per episode and resolve null;
+`onStorageError: 'raise'` raises. Flush returns a frozen complete/pending/rejected snapshot. Trace
+flush/close timeouts use seconds. The `spoolPath` override is a complete filename; default namespace
+paths use service and credential hashes. Browser inference imports remain compatible; durable browser
+recording is not provided. The existing `TraceClient` is preserved. See
+[storage, protocol, recovery and lifecycle](../../docs/durable-traces.md).
 ## Decision trace collection
 
 Use `TraceClient` to capture explicit decision inputs and answers from your own code,

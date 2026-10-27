@@ -3,15 +3,31 @@ import email.utils
 import http.client
 import json
 import math
+import os
+import ipaddress
+import threading
 import random
 import re
 import secrets
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, build_opener, HTTPRedirectHandler
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError as UrllibHTTPError, URLError
+
+from .errors import (
+    SainaError, SainaHelmError, SainaConnectionError, HTTPError, AuthenticationError,
+    PermissionDeniedError, NotFoundError, InvalidRequestError, RateLimitError, IdempotencyError,
+    ServerError, ModelBusyError, TransportError, ProtocolError, SpoolFullError,
+    TraceStorageError, InvalidApiKey, KeyRevoked, FreshAuthRequired, PermissionDenied,
+    AccountSuspended, NotFound, InvalidRequest, RateLimited, InsufficientCredits,
+    IdempotencyConflict, RequestInProgress, IdempotencyResultExpired, IdempotencyUnverifiable, InferenceFailed,
+    AccountingUnavailable, Overloaded, InferenceUnavailable, ERROR_CLASSES
+)
+
+from .answers import Answers, validate_answers
+from .validation import native_request, flatten_extra as _flatten_extra, json_value, json_copy, QUESTION_FIELDS as _QUESTION_FIELDS, REQUEST_FIELDS as _REQUEST_FIELDS
 
 __version__ = '0.2.0'
 
@@ -23,7 +39,6 @@ CREDIT_FIELDS = frozenset({'balance', 'reserved', 'available', 'overdraft_allowa
 
 _UUID7 = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')
 _INTEGER = re.compile(r'^-?[0-9]+$')
-_LOCAL_HOSTS = ('localhost', '127.0.0.1', '::1')
 
 
 def new_idempotency_key():
@@ -34,55 +49,18 @@ def new_idempotency_key():
     return str(uuid.UUID(bytes=bytes(raw)))
 
 
-class SainaHelmError(RuntimeError):
-    """A failed Saina call. Fields come from the typed error body when the server sent one.
 
-    ``code``, ``request_id``, ``admitted``, ``state``, ``retry`` and ``suspension`` are ``None`` when absent;
-    ``retry_after`` is in seconds.
-    """
-    code = None
+def _finite(value):
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
-    def __init__(self, message, status=None, *, code=None, request_id=None, admitted=None, state=None,
-                 retry=None, retry_after=None, suspension=None):
-        super().__init__(message)
-        self.status = status
-        self.code = code or type(self).code
-        self.request_id, self.admitted, self.state = request_id, admitted, state
-        self.retry, self.retry_after, self.suspension = retry, retry_after, suspension
+def _status_class(status):
+    return {401: AuthenticationError, 403: PermissionDeniedError, 404: NotFoundError,
+            422: InvalidRequestError, 429: RateLimitError, 503: ModelBusyError}.get(
+                status, ServerError if 500 <= status < 600 else HTTPError)
 
-
-class SainaConnectionError(SainaHelmError):
-    """The connection failed, timed out, or the response was cut off; the outcome may be unknown."""
-
-
-def _error_class(code):
-    name = ''.join(part.title() for part in code.split('_'))
-    return type(name, (SainaHelmError,), {'code': code, '__module__': __name__,
-                                          '__doc__': f'Saina error code ``{code}``.'})
-
-
-ERROR_CLASSES = {code: _error_class(code) for code in (
-    'invalid_api_key', 'key_revoked', 'account_suspended', 'insufficient_credits', 'invalid_request',
-    'rate_limited', 'overloaded', 'inference_failed', 'inference_unavailable', 'accounting_unavailable',
-    'idempotency_conflict', 'request_in_progress', 'idempotency_result_expired', 'idempotency_unverifiable',
-    'fresh_auth_required', 'permission_denied', 'not_found')}
-InvalidApiKey = ERROR_CLASSES['invalid_api_key']
-KeyRevoked = ERROR_CLASSES['key_revoked']
-AccountSuspended = ERROR_CLASSES['account_suspended']
-InsufficientCredits = ERROR_CLASSES['insufficient_credits']
-InvalidRequest = ERROR_CLASSES['invalid_request']
-RateLimited = ERROR_CLASSES['rate_limited']
-Overloaded = ERROR_CLASSES['overloaded']
-InferenceFailed = ERROR_CLASSES['inference_failed']
-InferenceUnavailable = ERROR_CLASSES['inference_unavailable']
-AccountingUnavailable = ERROR_CLASSES['accounting_unavailable']
-IdempotencyConflict = ERROR_CLASSES['idempotency_conflict']
-RequestInProgress = ERROR_CLASSES['request_in_progress']
-IdempotencyResultExpired = ERROR_CLASSES['idempotency_result_expired']
-IdempotencyUnverifiable = ERROR_CLASSES['idempotency_unverifiable']
-FreshAuthRequired = ERROR_CLASSES['fresh_auth_required']
-PermissionDenied = ERROR_CLASSES['permission_denied']
-NotFound = ERROR_CLASSES['not_found']
 
 _RETRY_CODES = {'accounting_unavailable', 'request_in_progress', 'rate_limited'}
 _RETRY_IF_NOT_ADMITTED = {'overloaded', 'inference_unavailable'}
@@ -114,7 +92,17 @@ class _Uncertain(Exception):
 
 
 def _int(value):
-    return int(value) if isinstance(value, str) and _INTEGER.match(value) else None
+    return int(value) if isinstance(value, str) and _INTEGER.fullmatch(value) else None
+
+
+
+def _credit(value):
+    if value is None or type(value) is int:
+        return value
+    parsed = _int(value)
+    if parsed is None:
+        raise ProtocolError('Invalid credit amount')
+    return parsed
 
 
 def _parse_credits(value):
@@ -122,7 +110,7 @@ def _parse_credits(value):
     if isinstance(value, list):
         return [_parse_credits(v) for v in value]
     if isinstance(value, dict):
-        return {k: (_int(v) if k in CREDIT_FIELDS and _int(v) is not None else _parse_credits(v))
+        return {k: (_credit(v) if k in CREDIT_FIELDS else _parse_credits(v))
                 for k, v in value.items()}
     return value
 
@@ -153,15 +141,22 @@ def _error(status, raw, headers):
     if not isinstance(error, dict) or not isinstance(error.get('code'), str):
         detail = body.get('detail') if isinstance(body, dict) else None
         message = f'Saina HTTP {status}' + (f': {detail[:500]}' if isinstance(detail, str) and detail else '')
-        return SainaHelmError(message, status, request_id=request_id, retry_after=retry_after), False
+        return _status_class(status)(message, status, request_id=request_id, retry_after=retry_after,
+                                     raw=body, fields=error if isinstance(error, dict) else None), False
     code = error['code']
     message = error.get('message')
     text = f'Saina HTTP {status} {code}' + (f': {message[:500]}' if isinstance(message, str) and message else '')
     admitted = error.get('admitted')
-    return ERROR_CLASSES.get(code, SainaHelmError)(
+    return ERROR_CLASSES.get(code, _status_class(status))(
         text, status, code=code, request_id=error.get('request_id') or request_id,
         admitted=admitted if isinstance(admitted, bool) else None, state=error.get('state'),
-        retry=error.get('retry'), retry_after=retry_after, suspension=error.get('suspension')), True
+        retry=error.get('retry'), retry_after=retry_after, suspension=error.get('suspension'),
+        raw=body, fields=error), True
+
+
+def _validate_idempotency_key(key):
+    if key is not None and (not isinstance(key, str) or not _UUID7.fullmatch(key.lower())):
+        raise ValueError('idempotency_key must be a UUIDv7 string; use new_idempotency_key()')
 
 
 def _retryable(error):
@@ -174,76 +169,110 @@ class SainaHelm:
     """Saina HTTP client.
 
     Inference calls are retried automatically only when they carry an ``Idempotency-Key``: pass
-    ``idempotency_key=`` per call, or set ``auto_idempotency_key=True`` so each logical call gets one new
+    ``idempotency_key=`` per call, or use the default ``auto_idempotency_key=True``. Each logical call gets one new
     UUIDv7 key that every retry of that call reuses with identical body bytes. Read-only account calls
     are retried on the same conditions without a key.
     """
 
-    def __init__(self, base_url=DEFAULT_BASE_URL, *, api_key, timeout=60, max_retries=2, max_retry_delay=30,
-                 auto_idempotency_key=False):
+    def __init__(self, base_url=None, *, api_key=None, timeout=None, max_retries=2, max_retry_delay=30,
+                 auto_idempotency_key=True, allow_http=False):
+        api_key = os.environ.get('SAINA_API_KEY') if api_key is None else api_key
+        base_url = os.environ.get('SAINA_BASE_URL', DEFAULT_BASE_URL) if base_url is None else base_url
+        if timeout is None:
+            timeout = float(os.environ.get('SAINA_TIMEOUT', '60'))
+        if not isinstance(base_url, str):
+            raise TypeError('base_url must be a string')
+        if type(allow_http) is not bool or type(auto_idempotency_key) is not bool:
+            raise TypeError('allow_http and auto_idempotency_key must be bools')
         parsed = urlparse(base_url)
+        try:
+            loopback = ipaddress.ip_address(parsed.hostname or '').is_loopback
+        except ValueError:
+            loopback = parsed.hostname == 'localhost'
+        try:
+            parsed.port
+        except ValueError:
+            raise ValueError('Invalid URL port') from None
+        if any(c.isspace() for c in base_url):
+            raise ValueError('URL must not contain whitespace')
         if (not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or
-                not (parsed.scheme == 'https' or parsed.scheme == 'http' and parsed.hostname in _LOCAL_HOSTS)):
+                not (parsed.scheme == 'https' or parsed.scheme == 'http' and (loopback or allow_http))):
             raise ValueError('Use HTTPS, or HTTP on localhost; no credentials/query in URL')
-        if not isinstance(api_key, str) or not api_key or any(c in api_key for c in '\r\n'):
+        if not isinstance(api_key, str) or not api_key.strip() or any(c in api_key for c in '\r\n'):
             raise ValueError('A nonempty API key is required')
-        if not math.isfinite(timeout) or timeout <= 0:
+        if type(timeout) not in (int, float):
+            raise TypeError('Timeout must be a number')
+        if type(max_retry_delay) not in (int, float):
+            raise TypeError('max_retry_delay must be a number')
+        if not _finite(timeout) or timeout <= 0:
             raise ValueError('Timeout must be positive and finite')
         if type(max_retries) is not int or max_retries < 0:
             raise ValueError('max_retries must be a nonnegative integer')
-        if not math.isfinite(max_retry_delay) or max_retry_delay < 0:
+        if not _finite(max_retry_delay) or max_retry_delay < 0:
             raise ValueError('max_retry_delay must be nonnegative and finite')
         self.base_url, self._key, self.timeout = base_url.rstrip('/'), api_key, timeout
         self.max_retries, self.max_retry_delay = max_retries, max_retry_delay
         self.auto_idempotency_key = auto_idempotency_key
-        self.last_metadata = None
+        self._metadata_local = threading.local()
         self._opener = build_opener(_NoRedirect())
         self._sleep, self._random = time.sleep, random.random
 
     # Inference -----------------------------------------------------------------------------------------
 
-    def ask(self, *, model, state, questions, mode='distribution', images=None, audios=None, idempotency_key=None,
-            specialist=None, **policy):
-        """Ask typed questions; policy defaults/overrides require decision mode.
+    @property
+    def last_metadata(self):
+        return getattr(self._metadata_local, 'value', None)
 
-        ``images`` (PNG, JPEG or WebP) and ``audios`` (WAV, FLAC, MP3, Ogg or WebM, at most 10 s each) are
-        lists of data URLs, local paths, http(s) URLs (downloaded here), bytes, PIL images (images) or
-        ``(samples, sample_rate)`` NumPy arrays (audio); every question sees all of them. They need a model
-        that reads images or audio. ``specialist`` names one of the model's domain specialists
-        (``GET /v1/specialists``) to answer instead of the model itself."""
-        return self.ask_with_metadata(model=model, state=state, questions=questions, mode=mode, images=images,
-                                      audios=audios, idempotency_key=idempotency_key, specialist=specialist,
-                                      **policy)[0]
+    @last_metadata.setter
+    def last_metadata(self, value):
+        self._metadata_local.value = value
 
-    def ask_with_metadata(self, *, model, state, questions, mode='distribution', images=None, audios=None,
-                          idempotency_key=None, specialist=None, **policy):
-        """Like :meth:`ask`, returning ``(result, ResponseMetadata)``."""
-        if not isinstance(questions, dict) or not questions:
-            raise ValueError('At least one typed question is required')
-        payload = dict(model=model, **({'specialist': specialist} if specialist else {}), state=state,
-                       **_media(images, audios), questions=questions, mode=mode, **policy)
+    def ask(self, *, model, state, questions, images=None, audios=None, specialist=None,
+            idempotency_key=None, extra=None):
+        """Ask for distributions; apply acceptance requirements locally with select()."""
+        return self.ask_with_metadata(model=model, state=state, questions=questions, images=images,
+                                      audios=audios, specialist=specialist,
+                                      idempotency_key=idempotency_key, extra=extra)[0]
+
+    def ask_with_metadata(self, *, model, state, questions, images=None, audios=None, specialist=None,
+                          idempotency_key=None, extra=None):
+        _validate_idempotency_key(idempotency_key)
+        payload = native_request(model, state, questions, specialist, extra)
+        payload.update(_media(images, audios))
         result, meta = self._post('/v1/ask', payload, idempotency_key)
-        _validate_answers(payload, result)
-        return result, meta
+        validate_answers(payload, result)
+        body_id = result.get('request_id')
+        if body_id is not None and (not isinstance(body_id, str) or not body_id.strip()):
+            raise ProtocolError('Invalid request ID')
+        if body_id is not None and meta.request_id is not None and body_id != meta.request_id:
+            raise ProtocolError('Body and header request IDs disagree')
+        request_id = body_id if body_id is not None else meta.request_id
+        if not isinstance(request_id, str) or not request_id.strip():
+            raise ProtocolError('Typed answers require a request ID')
+        meta = replace(meta, request_id=request_id)
+        self.last_metadata = meta
+        return Answers(result, meta, payload['questions']), meta
 
-    def system_one(self, *, model, state, questions, images=None, audios=None, idempotency_key=None,
-                   specialist=None):
+    def system_one(self, *, model, state, questions, images=None, audios=None, idempotency_key=None, extra=None, specialist=None):
         """Call ``POST /v1/systemone`` (System One wire format: ``noul``, ``choice``, ``score``); ``images`` and
         ``audios`` as in :meth:`ask`."""
         return self.system_one_with_metadata(model=model, state=state, questions=questions, images=images,
-                                             audios=audios, idempotency_key=idempotency_key,
-                                             specialist=specialist)[0]
+                                             audios=audios, idempotency_key=idempotency_key, extra=extra, specialist=specialist)[0]
 
-    def system_one_with_metadata(self, *, model, state, questions, images=None, audios=None, idempotency_key=None,
-                                 specialist=None):
+    def system_one_with_metadata(self, *, model, state, questions, images=None, audios=None, idempotency_key=None, extra=None, specialist=None):
+        _validate_idempotency_key(idempotency_key)
         if not isinstance(questions, dict) or not questions:
             raise ValueError('At least one question is required')
-        payload = dict(model=model, **({'specialist': specialist} if specialist else {}), state=state,
-                       **_media(images, audios), questions=questions)
+        payload = _flatten_extra(dict(model=model, state=state, questions=_questions(questions),
+                                      extra=extra), _REQUEST_FIELDS)
+        if specialist is not None:
+            payload['specialist'] = specialist
+        json_value(payload)
+        payload.update(_media(images, audios))
         result, meta = self._post('/v1/systemone', payload, idempotency_key)
         if (not isinstance(result, dict) or not isinstance(result.get('model'), str) or
                 not isinstance(result.get('answers'), dict) or set(result['answers']) != set(questions)):
-            raise SainaHelmError('Invalid System One response')
+            raise ProtocolError('Invalid System One response')
         return result, meta
 
     def decisions(self, *, model, input, questions, idempotency_key=None, **extensions):
@@ -257,9 +286,11 @@ class SainaHelm:
 
     def decisions_with_metadata(self, *, model, input, questions, idempotency_key=None, **extensions):
         """Like :meth:`decisions`, returning ``(result, ResponseMetadata)``."""
+        _validate_idempotency_key(idempotency_key)
         if not isinstance(questions, (list, tuple)) or not questions:
             raise ValueError('At least one question is required')
-        payload = dict(model=model, input=input, questions=list(questions), **extensions)
+        payload = dict(model=model, input=input, questions=[_flatten_extra(q, _QUESTION_FIELDS) for q in questions], **extensions)
+        payload = _flatten_extra(payload, _REQUEST_FIELDS)
         result, meta = self._post('/v1/decisions', payload, idempotency_key)
         _validate_decisions(payload, result)
         return result, meta
@@ -284,10 +315,9 @@ class SainaHelm:
     def _post(self, path, payload, idempotency_key):
         if idempotency_key is None and self.auto_idempotency_key:
             idempotency_key = new_idempotency_key()  # one key per logical call, reused by every retry
-        if idempotency_key is not None and (not isinstance(idempotency_key, str) or
-                                            not _UUID7.match(idempotency_key.lower())):
-            raise ValueError('idempotency_key must be a UUIDv7 string; use new_idempotency_key()')
-        body = json.dumps(payload, allow_nan=False).encode()  # serialized once: retries send identical bytes
+        _validate_idempotency_key(idempotency_key)
+        json_value(payload)
+        body = json.dumps(json_copy(payload), allow_nan=False).encode()  # serialized once: retries send identical bytes
         headers = {'Content-Type': 'application/json'}
         if idempotency_key is not None:
             headers['Idempotency-Key'] = idempotency_key
@@ -337,7 +367,7 @@ class SainaHelm:
             with self._opener.open(request, timeout=self.timeout) as response:
                 raw = response.read()
                 response_headers = getattr(response, 'headers', None)
-        except HTTPError as exc:
+        except UrllibHTTPError as exc:
             try:
                 raw = exc.read()
             except (OSError, http.client.HTTPException):
@@ -346,13 +376,13 @@ class SainaHelm:
             if _retryable(error) or exc.code >= 500 and not typed:  # untyped 5xx: outcome uncertain
                 raise _Uncertain(error, error.retry_after)
             raise error from None
-        except (URLError, OSError, http.client.HTTPException):
+        except (URLError, OSError, http.client.HTTPException) as exc:
             # Connection loss, timeout, or a response cut off: the outcome is unknown.
-            raise _Uncertain(SainaConnectionError('Saina connection failed or timed out')) from None
+            raise _Uncertain(TransportError('Saina connection failed or timed out', timed_out=isinstance(exc, TimeoutError) or isinstance(getattr(exc, 'reason', None), TimeoutError))) from None
         try:
             return json.loads(raw), response_headers
         except (ValueError, UnicodeError):
-            raise _Uncertain(SainaHelmError('Invalid JSON response')) from None
+            raise ProtocolError('Invalid JSON response') from None
 
 
 def _media(images, audios):
@@ -368,49 +398,19 @@ def _media(images, audios):
     return fields
 
 
-def _validate_answers(request, result):
-    def probability(value):
-        return type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 1
+Saina = SainaHelm
 
-    def fail():
-        raise SainaHelmError('Invalid typed answer response')
 
-    if (not isinstance(result, dict) or not isinstance(result.get('model'), str) or
-            not isinstance(result.get('answers'), dict) or
-            set(result['answers']) != set(request['questions'])):
-        fail()
-    for key, q in request['questions'].items():
-        a = result['answers'][key]
-        kind = q['type']
-        if not isinstance(a, dict) or a.get('type') != kind:
-            fail()
-        labels = (['yes', 'no'] if kind == 'yes_no' else
-                  [str(i) for i in range(len(q['levels']))] if kind == 'rating' else list(q['options']))
-        vector = ({'yes': a.get('yes'), 'no': a.get('no')} if kind == 'yes_no' else
-                  a.get('memberships' if kind == 'multi_choice' else 'probabilities'))
-        if not isinstance(vector, dict) or set(vector) != set(labels) or not all(probability(v) for v in vector.values()):
-            fail()
-        if kind != 'multi_choice' and (not math.isclose(sum(vector.values()), 1, rel_tol=0, abs_tol=1e-5) or not probability(a.get('confidence'))):
-            fail()
-        if kind == 'single_choice' and not (a.get('selection') in labels or request['mode'] == 'decision' and 'selection' in a and a['selection'] is None):
-            fail()
-        if kind == 'rating':
-            level = a.get('expected_level')
-            if (type(level) not in (int, float) or not math.isfinite(level) or not 0 <= level <= len(labels)-1 or
-                    not isinstance(a.get('levels'), list) or len(a['levels']) != len(labels)):
-                fail()
-        if request['mode'] == 'decision':
-            if a.get('reason') not in ('accepted', 'below_threshold', 'below_margin', 'tie'):
-                fail()
-            if kind == 'yes_no' and ('selected' not in a or not (a['selected'] is None or type(a['selected']) is bool)):
-                fail()
-            if kind == 'rating' and ('level' not in a or not (a['level'] is None or type(a['level']) is int and 0 <= a['level'] < len(labels))):
-                fail()
-            if kind == 'multi_choice':
-                selections = a.get('selections')
-                if (not isinstance(selections, list) or not all(isinstance(k, str) and k in labels for k in selections) or
-                        len(set(selections)) != len(selections)):
-                    fail()
+def _questions(questions):
+    result = {}
+    for key, question in questions.items():
+        if not isinstance(question, dict):
+            raise ValueError('Each question must be a dictionary')
+        question = _flatten_extra(question, _QUESTION_FIELDS)
+        if isinstance(question.get('options'), list):
+            question['options'] = dict.fromkeys(question['options'])
+        result[key] = question
+    return result
 
 
 def _validate_decisions(request, result):
@@ -420,14 +420,10 @@ def _validate_decisions(request, result):
     answers = result.get('answers') if isinstance(result, dict) else None
     if (not isinstance(result.get('model') if isinstance(result, dict) else None, str) or not isinstance(answers, list)
             or len(answers) != len(request['questions'])):
-        raise SainaHelmError('Invalid Decisions response')
+        raise ProtocolError('Invalid Decisions response')
     for q, a in zip(request['questions'], answers):
         if (not isinstance(a, dict) or a.get('name') != q.get('name') or a.get('type') not in (q.get('type'), 'refusal')
                 or a['type'] == 'predicate' and not probability(a.get('probability'))
                 or a['type'] in ('choice', 'score') and not (isinstance(a.get('probabilities'), list)
                                                              and probability(a.get('confidence')))):
-            raise SainaHelmError('Invalid Decisions response')
-
-
-Saina = SainaHelm
-SainaError = SainaHelmError
+            raise ProtocolError('Invalid Decisions response')

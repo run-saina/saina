@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased — 1.0 client contract changes
+
+- **Durable external logging:** add Python and Node.js `Traces.log()` with a shared SQLite spool,
+  commit-before-ID semantics, hashed namespace binding, atomic capacity accounting and recovery after
+  process failure. Add exact acknowledgment handling, quarantine/export/retry/discard, warning episodes,
+  immutable flush snapshots and bounded, idempotent shutdown. Node tracing requires 22.13+; inference
+  retains existing runtimes. Preserve the newer staged `TraceClient` compatibility implementation.
+- Specify and implement matching additive `/v1/traces` backend contracts, per-record acceptance,
+  account-scoped content deduplication and retained digest receipts. See [durable logging](docs/durable-traces.md).
+
+- **Breaking default:** automatic UUIDv7 idempotency keys are now enabled for inference, including
+  metadata variants. Pass `auto_idempotency_key=False` (JavaScript `autoIdempotencyKey: false`) to retain
+  the previous behavior. Retry defaults remain two retries and 30 seconds total delay.
+- Add broad HTTP error categories and status fallbacks while retaining code-specific errors and exact
+  compatibility aliases. Preserve all server fields in `.fields` and the error body in `.raw`.
+- **Typed native answers:** `ask()` returns immutable question-to-answer mappings in Python, with
+  integer rating keys, result-bound metadata, independent `.raw` snapshots and typed serialization.
+  JavaScript uses immutable `result.answers` with `toObject()` / `toJSON()`. Credits serialize as Python
+  integers and JavaScript decimal strings. `ask_with_metadata()` / `askWithMetadata()` remain available.
+- **Local selection:** use `.select()` with a required probability threshold and optional minimum margin;
+  threshold-first reasons include `no_options_selected`. Use `.value` and `.accepted`; false and rating
+  index zero can be accepted. Replace native remote decision-mode arguments with local selection.
+- Validate requests before media I/O and enforce response request IDs, probability vectors, derived
+  confidence, rating expectations and echoes. Protocol failures are not automatically retried.
+- Resolve environment configuration at construction, add explicit HTTP opt-in and thread-local Python
+  `last_metadata`. Compatibility endpoints retain wire-shaped results and specialist arguments.
+- Flatten reserved `extra` extensions and reject collisions before network I/O; accept options lists.
+- Add the existing Decisions shim request shape with the same inference retry defaults.
+- See [migration notes](MIGRATION.md) for compatibility and the resolved durable storage/lifecycle contract.
+- Audit current staging trace ingestion and recent SDK/backend fixes: document the implemented legacy
+  protocol and distinguish it from the new durable logging contract. See [backend evidence](docs/trace-backend-audit.md).
+
+## Unreleased
 ## 0.10.2 / TypeScript 0.5.2
 
 - Support eventually consistent native capture by retrying temporary not-found responses when reporting outcomes.
