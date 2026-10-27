@@ -404,3 +404,11 @@ are checked before loading models.
 
 Exit codes: 0 success, 1 setup/integrity/runtime failure, 2 invalid arguments,
 130 cancelled. See [validation](docs/local-validation.md) and [Mac instructions](docs/mac-test.md).
+
+## Decision trace collection
+
+Use `TraceClient` to capture explicit decision inputs and answers from your own code,
+observe them in Studio, and prepare datasets from collection evidence. Python supports
+sync/async context managers; TypeScript provides an async callback scope.
+`invoke_endpoint` / `invokeEndpoint` calls a Saina Decision Endpoint with one server-side trace.
+See [decision trace collection](docs/tracing.md).

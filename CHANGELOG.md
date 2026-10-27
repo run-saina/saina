@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.0
+
+- Add trace-only Python capture scopes and typed JavaScript/TypeScript callback scopes.
+- Batch decision evidence into collections, link outcomes, expose delivery health and explicit shutdown.
+- Call Saina Decision Endpoints with server-side capture through the same client.
+
 ## 0.9.3
 
 - **Model loading no longer fails when a release's card or version notes were edited after packaging.** The

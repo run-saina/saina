@@ -90,3 +90,11 @@ object as before; `client.lastMetadata` holds the metadata of the last inference
 
 This client calls an existing endpoint; it does not run weights in JavaScript.
 Apache-2.0. Saina is operated by Rama Labs Inc.
+
+## Decision trace collection
+
+Use `TraceClient` to capture explicit decision inputs and answers from your own code,
+observe them in Studio, and prepare datasets from collection evidence. Python supports
+sync/async context managers; TypeScript provides an async callback scope.
+`invoke_endpoint` / `invokeEndpoint` calls a Saina Decision Endpoint with one server-side trace.
+See [decision trace collection](https://github.com/run-saina/saina/blob/staging/docs/tracing.md).

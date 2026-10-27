@@ -173,3 +173,6 @@ export interface DecisionsResponse {
           output_tokens: 0; output_tokens_details: {reasoning_tokens: 0}; total_tokens: number};
 }
 export { SainaHelm as Saina, SainaHelmError as SainaError };
+
+export {TraceClient, DecisionTrace, TraceDeliveryError} from './traces.js';
+export type {TraceJson, TraceOptions, DecisionTraceOptions, EndpointDecision} from './traces.js';

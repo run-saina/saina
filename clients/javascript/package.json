@@ -1,6 +1,6 @@
 {
   "name": "@run-saina/sdk",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Typed client for the Saina Helm probability API",
   "type": "module",
   "main": "./index.js",
@@ -16,7 +16,9 @@
     "index.d.ts",
     "README.md",
     "LICENSE",
-    "NOTICE"
+    "NOTICE",
+    "traces.js",
+    "traces.d.ts"
   ],
   "engines": {
     "node": ">=20"

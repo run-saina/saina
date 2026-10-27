@@ -345,3 +345,5 @@ function validateAnswers(request, result) {
     }
   }
 }
+
+export {TraceClient, DecisionTrace, TraceDeliveryError} from './traces.js';
