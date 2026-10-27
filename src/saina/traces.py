@@ -201,6 +201,7 @@ class TraceClient:
                     delay = min(30, max(0, float(exc.headers.get('Retry-After', delay))))
                 except (ValueError, TypeError):
                     pass
+                exc.close()
             except (OSError, URLError, ValueError):
                 error = TraceDeliveryError('Saina trace connection or response failed')
                 transient = True
@@ -233,7 +234,7 @@ class TraceClient:
                 receipt = self._post('/v1/studio/data/collections/'+quote(self.collection, safe='')+'/traces',
                                      {'source': self.source, 'traces': batch})
                 expected = [r['decision_id'] for r in batch]
-                if receipt.get('decision_ids') != expected:
+                if not isinstance(receipt, dict) or receipt.get('decision_ids') != expected:
                     raise TraceDeliveryError('Trace service returned an invalid acknowledgement')
                 with self._lock:
                     del self._queue[:len(batch)]
