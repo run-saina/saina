@@ -188,6 +188,12 @@ class RetryTests(unittest.TestCase):
 
 
 class AccountTests(unittest.TestCase):
+    def test_balance_preserves_nested_credit_breakdown(self):
+        breakdown = {'free': '0', 'free_expires_at': None, 'plan': '0',
+                     'plan_expires_at': None, 'purchased': '9007199254740993'}
+        c = client(Reply({'balance': '9007199254740993', 'credits': breakdown}))
+        self.assertEqual(c.balance(), {'balance': 9007199254740993, 'credits': breakdown})
+
     def test_credit_strings_become_ints(self):
         big = '18446744073709551615'
         c = client(Reply({'account_id': 'acc', 'balance': big, 'reserved': '0', 'available': big,

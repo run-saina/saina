@@ -110,7 +110,7 @@ def _parse_credits(value):
     if isinstance(value, list):
         return [_parse_credits(v) for v in value]
     if isinstance(value, dict):
-        return {k: (_credit(v) if k in CREDIT_FIELDS else _parse_credits(v))
+        return {k: (_credit(v) if k in CREDIT_FIELDS and not isinstance(v, (dict, list)) else _parse_credits(v))
                 for k, v in value.items()}
     return value
 
