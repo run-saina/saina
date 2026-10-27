@@ -214,13 +214,13 @@ export { SainaHelm as Saina };
 export interface DecisionsRequest {
   model: string;
   input: Content;
-  questions: Array<{name: string; type: 'predicate' | 'choice' | 'score'; extra?: Record<string, Json>; [key: string]: unknown}>;
+  questions: Array<{name?: string; type: 'predicate' | 'choice' | 'score'; extra?: Record<string, Json>; [key: string]: unknown}>;
   extra?: Record<string, Json>;
   [key: string]: unknown;
 }
 export interface DecisionsResponse {
   model: string;
-  answers: Array<{name: string; type: 'predicate' | 'choice' | 'score' | 'refusal'; [key: string]: unknown}>;
+  answers: Array<{name: string | null; type: 'predicate' | 'choice' | 'score' | 'refusal'; [key: string]: unknown}>;
 }
 export function stringifyCredits(value: unknown): string;
 

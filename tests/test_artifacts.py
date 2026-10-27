@@ -80,12 +80,12 @@ def test_huggingface_cache_symlinks_are_supported(bundle, tmp_path):
 
 def test_doctor_success_is_only_an_integrity_claim(bundle, capsys):
     root, mapping = bundle
-    assert main(['doctor', '--checkpoint', str(root), '--json']) == 0
+    assert main(['doctor', '--checkpoint', str(root), '--backend', 'native', '--json']) == 0
     result = json.loads(capsys.readouterr().out)
     assert result['status'] == 'integrity_verified'
     assert result['files'] == sorted(mapping)
     assert 'readiness are not checked' in result['message']
-    assert main(['doctor', '--checkpoint', str(root), '--require', 'helm-hidden', '--json']) == 1
+    assert main(['doctor', '--checkpoint', str(root), '--backend', 'native', '--require', 'helm-hidden', '--json']) == 1
     assert 'helm-hidden' in json.loads(capsys.readouterr().out)['message']
 
 
@@ -99,7 +99,7 @@ def test_module_entrypoint_needs_no_site_packages(bundle):
     source = Path(__file__).resolve().parents[1] / 'src'
     # -S excludes installed inference packages; the complete command must remain offline.
     result = subprocess.run([sys.executable, '-S', '-m', 'saina', 'doctor',
-                             '--checkpoint', str(root), '--json'], cwd=source,
+                             '--checkpoint', str(root), '--backend', 'native', '--json'], cwd=source,
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)['status'] == 'integrity_verified'

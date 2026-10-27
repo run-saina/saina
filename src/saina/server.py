@@ -361,7 +361,8 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
     if cors_origins:
         # Opt-in for self-hosters with their own browser UI. Only the listed origins; no cookies.
         app.add_middleware(CORSMiddleware, allow_origins=cors_origins, allow_methods=['GET', 'POST'],
-                           allow_headers=['Authorization', 'Content-Type'], allow_credentials=False, max_age=600)
+                           allow_headers=['Authorization', 'Content-Type', 'Idempotency-Key'],
+                           expose_headers=['X-Request-ID'], allow_credentials=False, max_age=600)
     bearer = HTTPBearer(auto_error=False)
 
     @app.middleware('http')
@@ -376,6 +377,8 @@ def create_app(scorer=None, api_key=None, cors_origins=None, service_token=None,
                 'error': {'code': 'https_required', 'message': 'Use https'}, 'detail': 'Use https'},
                 headers={'Upgrade': 'TLS/1.2'})
         response = await call_next(request)
+        from uuid import uuid4
+        response.headers.setdefault('X-Request-ID', str(uuid4()))
         if proto == 'https':
             response.headers['Strict-Transport-Security'] = 'max-age=15552000'
         return response

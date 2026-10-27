@@ -282,7 +282,7 @@ export class SainaHelm {
     const probability = v => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
     if (typeof result?.model !== 'string' || !Array.isArray(result.answers) ||
         result.answers.length !== request.questions.length || result.answers.some((a, i) =>
-          !a || a.name !== request.questions[i].name || ![request.questions[i].type, 'refusal'].includes(a.type) ||
+          !a || a.name !== (request.questions[i].name ?? null) || ![request.questions[i].type, 'refusal'].includes(a.type) ||
           a.type === 'predicate' && !probability(a.probability) ||
           ['choice', 'score'].includes(a.type) && (!Array.isArray(a.probabilities) || !probability(a.confidence))))
       throw new ProtocolError('Invalid Decisions response');

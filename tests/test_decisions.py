@@ -502,7 +502,7 @@ class ClientEndToEndTests(unittest.TestCase):
             result = client.decisions(model='saina-helm', input=STATE, questions=OPENAI['questions'])
             self.assertEqual([a['name'] for a in result['answers']], ['billing', 'team', 'urgency'])
             native = client.ask(model='saina-helm', state=STATE, questions=NATIVE['questions'])
-            self.assertEqual(result['answers'][0]['probability'], native['answers']['billing']['yes'])
+            self.assertEqual(result['answers'][0]['probability'], native['billing'].yes)
             refused = client.decisions(model='saina-helm', input=STATE, questions=OPENAI['questions'][:1],
                                        mode='decision', threshold=0.99)
             self.assertEqual(refused['answers'][0]['type'], 'refusal')
