@@ -70,3 +70,20 @@ test('background delivery reports errors and recovers on close',async t=>{
   for(let i=0;i<100&&!errors.length;i++)await new Promise(resolve=>setTimeout(resolve,5));
   assert(errors.length);await client.close();assert.equal(client.pendingCount,0);assert(requests.length>=2);
 });
+
+test('a full batch flushes promptly even when a long interval timer already exists',async t=>{
+  const {client,requests}=await fixture(t,{batchSize:2,flushInterval:60000});
+  await client.decision({task:'route',inputs:{}},trace=>trace.setAnswer('one'));
+  await client.decision({task:'route',inputs:{}},trace=>trace.setAnswer('two'));
+  for(let i=0;i<100&&!requests.length;i++)await new Promise(resolve=>setTimeout(resolve,5));
+  assert.equal(requests.length,1);assert.equal(requests[0].body.traces.length,2);
+});
+
+test('parallel scopes retain every identity and callback result across batches',async t=>{
+  const {client,requests,errors}=await fixture(t,{batchSize:5});
+  const results=await Promise.all(Array.from({length:100},(_,i)=>client.decision({task:'route',inputs:{i},decisionId:'event-'+i},async trace=>{
+    await new Promise(resolve=>setTimeout(resolve,i%3));trace.setAnswer(i);return i;
+  })));
+  await client.flush();assert.deepEqual(results,Array.from({length:100},(_,i)=>i));
+  const records=requests.flatMap(r=>r.body.traces||[]);assert.equal(records.length,100);assert.equal(new Set(records.map(r=>r.decision_id)).size,100);assert.equal(client.droppedCount,0);assert.deepEqual(errors,[]);
+});

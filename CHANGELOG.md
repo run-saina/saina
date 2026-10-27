@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.1 / TypeScript 0.5.1
+
+- Reuse a bounded pool of HTTP connections for Python trace delivery and endpoint invocation.
+- Flush TypeScript batches immediately when full, and reuse trace byte sizes during batching.
+- Exercise concurrent scopes, connection limits, terminal errors and inference disconnects; inference is never replayed.
+
 ## 0.10.0
 
 - Add trace-only Python capture scopes and typed JavaScript/TypeScript callback scopes.

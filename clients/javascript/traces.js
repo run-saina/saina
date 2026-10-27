@@ -37,7 +37,7 @@ export class DecisionTrace {
 }
 
 export class TraceClient {
-  #apiKey; #queue = []; #timer; #activeFlush; #closed = false; #closing = false;
+  #apiKey; #queue = []; #sizes = []; #timer; #activeFlush; #closed = false; #closing = false;
   constructor({collection, apiKey, baseUrl = 'https://api.saina.run', source = 'application', batchSize = 100,
     flushInterval = 5000, maxPending = 1000, timeoutMs = 10000, maxRetries = 2, onError} = {}) {
     const url = new URL(baseUrl);
@@ -59,7 +59,11 @@ export class TraceClient {
     try { if (this.onError) this.onError(error); else console.warn('Saina trace capture/delivery failed; inspect lastError and pendingCount'); } catch { /* Preserve application behavior. */ }
   }
   #schedule() {
-    if (this.#timer || this.#closing || !this.#queue.length) return;
+    if (this.#closing || !this.#queue.length) return;
+    if (this.#timer) {
+      if (this.#queue.length < this.batchSize) return;
+      clearTimeout(this.#timer);
+    }
     this.#timer = setTimeout(() => {
       this.#timer = undefined;
       void this.flush().catch(error => this.#notify(error)).finally(() => this.#schedule());
@@ -68,10 +72,11 @@ export class TraceClient {
   }
   #enqueue(record) {
     this.#checkOpen();
-    if (bytes(record) > 1048576 || this.#queue.length >= this.maxPending) {
+    const size=bytes(record);
+    if (size > 1048576 || this.#queue.length >= this.maxPending) {
       this.droppedCount++; throw new TraceDeliveryError('Trace exceeds 1 MiB or the pending queue is full');
     }
-    this.#queue.push(record); this.#schedule();
+    this.#queue.push(record); this.#sizes.push(size); this.#schedule();
   }
   async decision(options, fn) {
     this.#checkOpen();
@@ -126,13 +131,13 @@ export class TraceClient {
   async #deliver(remaining) {
     while (remaining > 0) {
       const batch = []; let size = 0;
-      for (const record of this.#queue.slice(0, Math.min(this.batchSize, remaining))) {
-        const n = bytes(record); if (batch.length && size + n > 8 * 1048576) break;
+      for (let i=0; i<Math.min(this.#queue.length,this.batchSize,remaining); i++) {
+        const record=this.#queue[i], n=this.#sizes[i]; if (batch.length && size + n > 8 * 1048576) break;
         batch.push(record); size += n;
       }
       const receipt = await this.#post('/v1/studio/data/collections/' + encodeURIComponent(this.collection) + '/traces', {source: this.source, traces: batch});
       if (JSON.stringify(receipt.decision_ids) !== JSON.stringify(batch.map(r => r.decision_id))) throw new TraceDeliveryError('Trace service returned an invalid acknowledgement');
-      this.#queue.splice(0, batch.length); remaining -= batch.length;
+      this.#queue.splice(0, batch.length); this.#sizes.splice(0,batch.length); remaining -= batch.length;
     }
     this.lastError = null;
   }

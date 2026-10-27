@@ -116,3 +116,48 @@ class TraceCapture(unittest.TestCase):
             self.assertEqual(len(requests),2);self.assertEqual(requests[0],requests[1])
             self.assertEqual(requests[0][2],'Bearer test-token')
         finally:server.shutdown();server.server_close();thread.join()
+
+    def test_native_connection_pool_is_bounded_and_reuses_sockets_under_concurrency(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import time,socket
+        peers=set();active=maximum=count=0;lock=threading.Lock()
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version='HTTP/1.1'
+            def setup(self):super().setup();self.connection.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
+            def log_message(self,*args):pass
+            def do_POST(self):
+                nonlocal active,maximum,count
+                self.rfile.read(int(self.headers['Content-Length']))
+                with lock:peers.add(self.client_address[1]);active+=1;maximum=max(maximum,active);count+=1
+                time.sleep(.01)
+                data=b'{"decision_id":"native","collection_id":"support"}'
+                self.send_response(200);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
+                with lock:active-=1
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        client=self.client(base_url='http://127.0.0.1:'+str(server.server_port),max_connections=4)
+        try:
+            with ThreadPoolExecutor(max_workers=16) as executor:
+                results=list(executor.map(lambda i:client.invoke_endpoint('support-triage',{'state':str(i)}),range(64)))
+            self.assertEqual(len(results),64);self.assertEqual(count,64);self.assertLessEqual(maximum,4);self.assertLessEqual(len(peers),4)
+            client.close()
+        finally:server.shutdown();server.server_close();thread.join()
+
+    def test_native_disconnect_is_not_replayed_and_terminal_html_errors_do_not_retry(self):
+        requests=[]
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_POST(self):
+                requests.append(self.path);self.rfile.read(int(self.headers['Content-Length']))
+                if self.path.endswith('/decide'):
+                    self.connection.shutdown(2);self.connection.close();return
+                data=b'<html>not authorized</html>'
+                self.send_response(403);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        client=self.client(base_url='http://127.0.0.1:'+str(server.server_port))
+        try:
+            with self.assertRaises(TraceDeliveryError):client.invoke_endpoint('support-triage',{'state':'Ticket'})
+            self.assertEqual(len(requests),1)
+            with self.assertRaises(TraceDeliveryError) as error:client._post('/rejected',{})
+            self.assertEqual(error.exception.status,403);self.assertEqual(len(requests),2)
+            client.close()
+        finally:server.shutdown();server.server_close();thread.join()

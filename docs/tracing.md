@@ -167,9 +167,15 @@ raise delivery errors. Scope-construction and `set_answer` validation errors rai
 immediately; supply only valid JSON.
 
 Options: Python `batch_size`, `flush_interval` (seconds), `max_pending`, `timeout`
-(seconds), `max_retries`; TypeScript `batchSize`, `flushInterval` (milliseconds),
+(seconds), `max_retries`, `max_connections` (32 by default, 1–256); TypeScript `batchSize`, `flushInterval` (milliseconds),
 `maxPending`, `timeoutMs`, `maxRetries`. Transient delivery retries default to two,
 with a maximum of five. Never rely on background delivery without monitoring.
+
+Reuse one client per service origin and collection. Python reuses a bounded pool of
+HTTP connections for delivery and explicit endpoint calls; TypeScript uses the
+runtime's fetch connection pool. Full batches are scheduled immediately. Capture
+scopes perform JSON snapshots and enqueue locally; they never wait for HTTP.
+Payload size still affects CPU time: prefer small explicit fields and asset references.
 
 For standalone Studio, set `base_url` / `baseUrl` to the operator's service origin
 and omit the API key. Hosted clients use an account API key and the account-scoped

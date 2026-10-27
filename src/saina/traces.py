@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import http.client
+import queue
+import select
 import math
 import re
 import threading
@@ -11,7 +14,7 @@ import warnings
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, Request, build_opener, getproxies, proxy_bypass
 from uuid import uuid4
 
 
@@ -97,7 +100,7 @@ class TraceClient:
     """
     def __init__(self, *, collection, api_key=None, base_url='https://api.saina.run',
                  source='application', batch_size=100, flush_interval=5.0,
-                 max_pending=1000, timeout=10.0, max_retries=2, on_error=None):
+                 max_pending=1000, timeout=10.0, max_retries=2, max_connections=32, on_error=None):
         self.collection, self.source = _id(collection), _id(source)
         url = urlsplit(base_url)
         if url.scheme not in ('http', 'https') or not url.hostname or url.username or url.password or url.query or url.fragment or url.path.rstrip('/'):
@@ -114,12 +117,18 @@ class TraceClient:
             raise ValueError('max_retries must be 0–5')
         if on_error is not None and not callable(on_error):
             raise ValueError('on_error must be callable')
+        if type(max_connections) is not int or not 1 <= max_connections <= 256:
+            raise ValueError('max_connections must be 1–256')
+        self._origin = url
+        self._proxy = getproxies().get(url.scheme) if not proxy_bypass(url.hostname) else None
+        self._connections = queue.LifoQueue(max_connections)
+        self._slots = threading.BoundedSemaphore(max_connections)
         self.base_url, self._api_key = base_url.rstrip('/'), api_key
         self.batch_size, self.flush_interval, self.max_pending = batch_size, flush_interval, max_pending
         self.timeout, self.max_retries, self.on_error = timeout, max_retries, on_error
         self._lock, self._send_lock = threading.Lock(), threading.Lock()
         self._wake, self._stop = threading.Event(), threading.Event()
-        self._queue, self._thread = [], None
+        self._queue, self._sizes, self._thread = [], [], None
         self._closed, self._closing = False, False
         self.last_error = None
         self.dropped_count = 0
@@ -148,8 +157,10 @@ class TraceClient:
         return DecisionTrace(self, task, inputs, decision_id=decision_id, metadata=metadata)
 
     def _enqueue(self, record):
-        record = _snapshot(record)
-        if len(json.dumps(record, ensure_ascii=False).encode()) > 1048576:
+        # DecisionTrace owns this finished record; inputs/answers were snapshotted
+        # when supplied. Avoid copying the entire payload a second time on exit.
+        size = len(json.dumps(record, allow_nan=False, ensure_ascii=False, separators=(',',':')).encode())
+        if size > 1048576:
             self.dropped_count += 1
             raise TraceDeliveryError('Trace exceeds 1 MiB; use asset references')
         with self._lock:
@@ -158,6 +169,7 @@ class TraceClient:
                 self.dropped_count += 1
                 raise TraceDeliveryError('Trace queue is full')
             self._queue.append(record)
+            self._sizes.append(size)
             if self._thread is None:
                 self._thread = threading.Thread(target=self._worker, name='saina-traces', daemon=True)
                 self._thread.start()
@@ -175,20 +187,64 @@ class TraceClient:
             except Exception as exc:
                 self._notify(exc)
 
+    def _request(self, path, data, headers):
+        if self._proxy:
+            # Preserve environment/system proxy behavior for deployments using it.
+            with build_opener(_NoRedirect()).open(Request(self.base_url+path,data=data,headers=headers,method='POST'),timeout=self.timeout) as response:
+                return response.status, {k.lower():v for k,v in response.headers.items()}, response.read(2*1048576+1)
+        if not self._slots.acquire(timeout=self.timeout):
+            raise TraceDeliveryError('Trace HTTP connection pool is busy')
+        connection = None
+        reusable = False
+        try:
+            try:
+                connection, idle_since = self._connections.get_nowait()
+                if time.monotonic()-idle_since > 4 or (connection.sock and select.select([connection.sock],[],[],0)[0]):
+                    connection.close();connection=None
+            except queue.Empty:
+                pass
+            if connection is None:
+                cls = http.client.HTTPSConnection if self._origin.scheme=='https' else http.client.HTTPConnection
+                connection = cls(self._origin.hostname,self._origin.port,timeout=self.timeout)
+            connection.request('POST',path,body=data,headers=headers)
+            response=connection.getresponse()
+            raw=response.read(2*1048576+1)
+            if len(raw)<=2*1048576 and response.length not in (None,0):
+                raise http.client.IncompleteRead(raw)
+            reusable=not response.will_close and len(raw)<=2*1048576
+            return response.status,{k.lower():v for k,v in response.headers.items()},raw
+        finally:
+            if connection is not None:
+                if reusable and not self._closed:
+                    self._connections.put_nowait((connection,time.monotonic()))
+                else:
+                    connection.close()
+            self._slots.release()
+
     def _post(self, path, body, *, retry=True):
-        data = json.dumps(body, allow_nan=False, ensure_ascii=False).encode()
+        data = json.dumps(body, allow_nan=False, ensure_ascii=False, separators=(',', ':')).encode()
         headers = {'Content-Type': 'application/json', 'X-Saina-Client': 'python-sdk'}
         if self._api_key:
             headers['Authorization'] = 'Bearer ' + self._api_key
         for attempt in range((self.max_retries if retry else 0)+1):
             delay = min(2**attempt * .25, 5)
             try:
-                request = Request(self.base_url + path, data=data, headers=headers, method='POST')
-                with build_opener(_NoRedirect()).open(request, timeout=self.timeout) as response:
-                    raw = response.read(2*1048576+1)
-                    if len(raw) > 2*1048576:
-                        raise TraceDeliveryError('Trace service response exceeds 2 MiB')
-                    return json.loads(raw)
+                status, response_headers, raw = self._request(path,data,headers)
+                if len(raw)>2*1048576:
+                    raise TraceDeliveryError('Trace service response exceeds 2 MiB')
+                try:value = json.loads(raw)
+                except ValueError:
+                    if 200<=status<300:raise
+                    value={}
+                if 200<=status<300:
+                    return value
+                code = value.get('error',{}).get('code') if isinstance(value,dict) else None
+                error = TraceDeliveryError('Saina trace request failed',status=status,code=code)
+                transient = status in (408,429,500,502,503,504)
+                try:
+                    delay=min(30,max(0,float(response_headers.get('retry-after',delay))))
+                except (ValueError,TypeError):
+                    pass
             except HTTPError as exc:
                 code = None
                 try:
@@ -202,7 +258,7 @@ class TraceClient:
                 except (ValueError, TypeError):
                     pass
                 exc.close()
-            except (OSError, URLError, ValueError):
+            except (OSError, URLError, ValueError, http.client.HTTPException):
                 error = TraceDeliveryError('Saina trace connection or response failed')
                 transient = True
             if not retry or not transient or attempt == self.max_retries:
@@ -225,8 +281,7 @@ class TraceClient:
                 with self._lock:
                     # Bound by bytes as well as record count (hosted request limit: 25 MiB).
                     batch, size = [], 0
-                    for record in self._queue[:min(self.batch_size, remaining)]:
-                        n = len(json.dumps(record, ensure_ascii=False).encode())
+                    for record,n in zip(self._queue[:min(self.batch_size, remaining)],self._sizes):
                         if batch and size+n > 8*1048576:
                             break
                         batch.append(record)
@@ -238,6 +293,7 @@ class TraceClient:
                     raise TraceDeliveryError('Trace service returned an invalid acknowledgement')
                 with self._lock:
                     del self._queue[:len(batch)]
+                    del self._sizes[:len(batch)]
                 remaining -= len(batch)
             self.last_error = None
 
@@ -252,6 +308,9 @@ class TraceClient:
             self._thread.join()
         self.flush()
         self._closed = True
+        while True:
+            try:connection,_=self._connections.get_nowait();connection.close()
+            except queue.Empty:break
 
     async def aclose(self):
         await asyncio.to_thread(self.close)
