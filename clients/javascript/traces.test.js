@@ -87,3 +87,12 @@ test('parallel scopes retain every identity and callback result across batches',
   await client.flush();assert.deepEqual(results,Array.from({length:100},(_,i)=>i));
   const records=requests.flatMap(r=>r.body.traces||[]);assert.equal(records.length,100);assert.equal(new Set(records.map(r=>r.decision_id)).size,100);assert.equal(client.droppedCount,0);assert.deepEqual(errors,[]);
 });
+
+test('failed full batches wait before background redelivery instead of spinning',async t=>{
+  const {client,requests,errors,fail}=await fixture(t,{batchSize:1,flushInterval:1000,maxRetries:0});fail(100);
+  await client.decision({task:'route',inputs:{}},trace=>trace.setAnswer('billing'));
+  for(let i=0;i<100&&!errors.length;i++)await new Promise(resolve=>setTimeout(resolve,5));
+  assert.equal(errors.length,1);await new Promise(resolve=>setTimeout(resolve,30));
+  assert.equal(requests.length,1);assert.equal(client.pendingCount,1);
+  fail(0);await client.close();assert.equal(client.pendingCount,0);
+});

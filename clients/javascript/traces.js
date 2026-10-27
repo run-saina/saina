@@ -37,7 +37,7 @@ export class DecisionTrace {
 }
 
 export class TraceClient {
-  #apiKey; #queue = []; #sizes = []; #timer; #activeFlush; #closed = false; #closing = false;
+  #apiKey; #queue = []; #sizes = []; #timer; #activeFlush; #retryAfter = 0; #closed = false; #closing = false;
   constructor({collection, apiKey, baseUrl = 'https://api.saina.run', source = 'application', batchSize = 100,
     flushInterval = 5000, maxPending = 1000, timeoutMs = 10000, maxRetries = 2, onError} = {}) {
     const url = new URL(baseUrl);
@@ -66,8 +66,11 @@ export class TraceClient {
     }
     this.#timer = setTimeout(() => {
       this.#timer = undefined;
-      void this.flush().catch(error => this.#notify(error)).finally(() => this.#schedule());
-    }, this.#queue.length >= this.batchSize ? 0 : this.flushInterval);
+      void this.flush().catch(error => {
+        this.#retryAfter = Date.now() + this.flushInterval;
+        this.#notify(error);
+      }).finally(() => this.#schedule());
+    }, Math.max(this.#queue.length >= this.batchSize ? 0 : this.flushInterval, this.#retryAfter - Date.now()));
     this.#timer.unref?.();
   }
   #enqueue(record) {
@@ -139,7 +142,7 @@ export class TraceClient {
       if (JSON.stringify(receipt.decision_ids) !== JSON.stringify(batch.map(r => r.decision_id))) throw new TraceDeliveryError('Trace service returned an invalid acknowledgement');
       this.#queue.splice(0, batch.length); this.#sizes.splice(0,batch.length); remaining -= batch.length;
     }
-    this.lastError = null;
+    this.lastError = null; this.#retryAfter = 0;
   }
   async close() {
     this.#closing = true; clearTimeout(this.#timer); this.#timer = undefined;
