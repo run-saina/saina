@@ -995,8 +995,9 @@ logs recovery and the episode's lost-record count at informational level.
 
 Python uses thread-owned, short-lived SQLite connections; JavaScript owns its
 connection on its Node event loop. Transactions coordinate capacity/admission and
-acknowledgment. Lock waits are bounded at 250 ms. Concurrent processes can share a
-spool with matching service/credential/capacity binding. Workers may redeliver the
+acknowledgment. Each SQLite lock attempt waits at most 250 ms. Python retries
+while another process commits, so a slow peer commit does not drop an admission.
+Concurrent processes can share a spool with matching service/credential/capacity binding. Workers may redeliver the
 same immutable record concurrently; tenant/trace-ID digest deduplication makes
 this safe. There is no crash lease delaying recovery or exclusive process owner.
 
@@ -1048,7 +1049,8 @@ during close still raise after cleanup, and repeated close remains harmless.
 Python context management preserves an already-active application exception.
 
 Delivery/flush/close timeouts do not bound an unresponsive filesystem or OS DNS
-resolver; SQLite lock waits can additionally take up to 250 ms. Connected HTTP
+resolver; each SQLite lock attempt waits at most 250 ms, and Python retries while
+a peer holds the write lock. Connected HTTP
 bodies and fetches are interrupted on close. Python atexit and Node beforeExit
 attempt five-second best-effort shutdown; forced termination has no hook guarantee.
 

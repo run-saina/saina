@@ -143,6 +143,36 @@ def test_binding_mismatch_never_mixes_credentials_and_paths_are_hashed(tmp_path,
     for t in [a,b,c]:t.close(timeout=0)
 
 
+def test_admission_waits_out_a_peer_lock_longer_than_one_attempt(tmp_path):
+    # A commit that outlasts the 250 ms SQLite busy timeout must not drop the record.
+    path = tmp_path/'spool.db'
+    seed = quiet(recorder(tmp_path))
+    assert seed.log(task='seed', inputs={})
+    seed.close(timeout=0)
+    started = threading.Event()
+
+    def hold():
+        db = sqlite3.connect(path, timeout=5, isolation_level=None)
+        db.execute('BEGIN IMMEDIATE')
+        started.set()
+        time.sleep(.6)
+        db.commit()
+        db.close()
+
+    thread = threading.Thread(target=hold)
+    thread.start()
+    assert started.wait(2)
+    writer = quiet(recorder(tmp_path))
+    began = time.monotonic()
+    try:
+        assert writer.log(task='queued', inputs={})
+        assert time.monotonic() - began >= .4
+        assert len(stored(path)) == 2
+    finally:
+        writer.close(timeout=0)
+        thread.join(3)
+
+
 def test_crash_after_commit_and_concurrent_process_admission(tmp_path):
     code='''import os,sys
 from saina import Traces

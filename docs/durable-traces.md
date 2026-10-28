@@ -110,8 +110,9 @@ No unbounded WAL is created. Acknowledgment deletes reclaim pages.
 
 Python opens and closes a connection on the thread performing each transaction;
 no SQLite connection crosses threads. JavaScript owns its synchronous connection
-on its event loop. Lock waits are bounded at 250 ms. Concurrent processes may
-append and acknowledge the same spool. Workers can send the same immutable record
+on its event loop. Each SQLite lock attempt waits at most 250 ms. Python retries
+that attempt while another process still holds the write lock, so one slow commit
+does not drop an admission. Concurrent processes may append and acknowledge the same spool. Workers can send the same immutable record
 concurrently; server identity/digest deduplication makes that safe. SQL updates
 commute and an ambiguous network failure does not remove records. No long-lived
 exclusive spool lock or crash lease delays restart recovery.
@@ -252,7 +253,8 @@ close, `log`, `flush`, `pending` and recovery operations raise, regardless of st
 mode. Python `with` manages resources and preserves an active application exception.
 
 Timeouts bound delivery/waiting, not an unresponsive filesystem or OS DNS resolver;
-SQLite lock acquisition can additionally take up to its 250 ms bound. Connected
+Each SQLite lock attempt waits at most 250 ms; Python repeats it while a peer
+still holds the write lock. Connected
 HTTP bodies and fetches are interrupted on close. Python's atexit and Node's
 beforeExit hooks attempt a five-second best-effort close; forced termination has no
 hook guarantee. In ephemeral/serverless environments explicitly flush before
