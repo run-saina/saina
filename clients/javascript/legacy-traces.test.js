@@ -49,6 +49,27 @@ test('incomplete scope is not marked successful and invalid JSON fails before ca
   assert.equal(requests[0].body.traces[0].status,'incomplete');assert(!('answer' in requests[0].body.traces[0]));
 });
 
+test('recorded_at replays a simulated clock and rejects timestamps without a timezone',async t=>{
+  const {client,requests}=await fixture(t);const stamp='2020-01-02T03:04:05.250000+00:00';
+  await client.decision({task:'route',inputs:{},recorded_at:stamp},trace=>trace.setAnswer('billing'));
+  await client.flush();
+  assert.equal(requests[0].body.traces[0].recorded_at,stamp);
+  assert.notEqual(requests[0].body.traces[0].completed_at,stamp);
+  await client.decision({task:'route',inputs:{},recorded_at:'2020-01-02T03:04:05Z'},trace=>trace.setAnswer('zulu'));
+  await client.flush();assert.equal(requests[1].body.traces[0].recorded_at,'2020-01-02T03:04:05Z');
+  await client.decision({task:'route',inputs:{}},trace=>trace.setAnswer('now'));
+  await client.flush();
+  assert.match(requests[2].body.traces[0].recorded_at,/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/);
+  for (const recorded_at of ['2020-01-02T03:04:05','2020-01-02','2020-13-01T00:00:00Z','2020-01-02T03:04:05+0000','2020-01-02 03:04:05Z',123,'']) {
+    await assert.rejects(client.decision({task:'route',inputs:{},recorded_at},()=>{}),TypeError);
+  }
+  const before=requests.length;
+  const native=await client.invokeEndpoint('support-triage',{state:'Ticket'});
+  assert.equal(native.decision_id,'native');
+  assert.deepEqual(requests[before].body,{state:'Ticket',version:'production',trace_collection_id:'support'});
+  assert.equal('recorded_at' in requests[before].body,false);
+});
+
 test('native endpoint invocation is explicit, never retried, and not captured twice',async t=>{
   const {client,requests,fail}=await fixture(t);
   const result=await client.invokeEndpoint('support-triage',{state:'Ticket'},{version:2});assert.equal(result.decision_id,'native');assert.equal(client.pendingCount,0);

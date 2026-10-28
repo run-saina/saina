@@ -6,6 +6,8 @@ export interface TraceOptions {
 }
 export interface DecisionTraceOptions {
   task: string; inputs: TraceJson; decisionId?: string; metadata?: Record<string, TraceJson>;
+  /** ISO 8601 timestamp with a timezone, for benchmark replay on a simulated clock. */
+  recorded_at?: string;
 }
 export class TraceDeliveryError extends Error { status?: number; code?: string; }
 export class DecisionTrace {

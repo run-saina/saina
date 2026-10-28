@@ -1,6 +1,6 @@
 import {TraceClient, type TraceJson, type EndpointDecision} from './index.js';
 const traces = new TraceClient({collection: 'support', source: 'app', onError: error => console.error(error.name)});
-const result: number = await traces.decision({task: 'route', inputs: {message: 'Ticket'}}, trace => {
+const result: number = await traces.decision({task: 'route', inputs: {message: 'Ticket'}, recorded_at: '2020-01-02T03:04:05Z'}, trace => {
   const answer: TraceJson = {team: 'billing'};
   trace.setAnswer(answer);
   return 42;

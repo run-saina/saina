@@ -214,16 +214,21 @@ class Traces:
         self._failures += 1
         return None
 
-    def log(self, *, task, inputs, outcome=_UNSET, metadata=None):
+    def log(self, *, task, inputs, outcome=_UNSET, metadata=None, endpoint=None):
+        """Commit one schema 1.0 record. ``endpoint`` is omitted when unset."""
         with self._condition:
             self._check()
             if not isinstance(task, str): raise TypeError('task must be a string')
             if not task.strip() or len(task) > 1024: raise ValueError('task must be nonblank and at most 1024 characters')
             if metadata is not None and not isinstance(metadata, Mapping):
                 raise TypeError('metadata must be a mapping')
+            if endpoint is not None:
+                if not isinstance(endpoint, str): raise TypeError('endpoint must be a string')
+                if not endpoint.strip(): raise ValueError('endpoint must be a nonblank string')
             record = dict(trace_id=new_idempotency_key(), recorded_at=datetime.now(timezone.utc).isoformat(),
                           task=task, inputs=inputs, metadata={} if metadata is None else metadata)
             if outcome is not _UNSET: record['outcome'] = outcome
+            if endpoint is not None: record['endpoint'] = endpoint
             json_value(record)
             record = json_copy(record)
             _depth(record)

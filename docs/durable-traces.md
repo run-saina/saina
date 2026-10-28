@@ -29,6 +29,9 @@ Default warn mode returns `None` for failed storage admissions; strict mode is
 interception, operation timing or inferred status. Omitted outcome differs from
 explicit null. Values are snapshotted before storage. Tasks are nonblank names of
 at most 1024 Unicode characters; JSON nesting is limited to 60 within a record.
+Optional `endpoint` is a nonblank string naming a decision endpoint. Leave it unset
+to omit the field; the SDK does not send JSON null in its place. Callers that
+already log without `endpoint` keep the previous request body.
 
 JavaScript durable recording requires **Node.js 22.13 or newer with node:sqlite**.
 There is no durable browser mode. Inference retains its existing runtime support;
@@ -131,13 +134,15 @@ It never invokes a model or submits native inference as external evidence.
     "task": "route ticket",
     "inputs": {"ticket": "Charged twice"},
     "outcome": null,
-    "metadata": {"application": "support"}
+    "metadata": {"application": "support"},
+    "endpoint": "support-triage"
   }]
 }
 ```
 
 `trace_id` is a canonical RFC UUID (SDKs generate UUIDv7); recording time includes
-a timezone. The record has exactly the fields above, with `outcome` optional.
+a timezone. The record has exactly the fields above. `outcome` and `endpoint` are
+optional. `endpoint`, when supplied, is a nonblank string and is otherwise absent.
 Metadata is an object, defaulting to `{}` in the SDK. No collection, source,
 execution start/end, duration, inferred status, or nested `extra` is introduced.
 
@@ -187,6 +192,9 @@ The legacy collection-based trace endpoint remains atomic and unchanged. Its
 schemas, execution facts, scoped IDs and memory queue are not translated into the
 new logging protocol. Native background capture remains best effort.
 
+Studio lists stored traces with `GET /v1/studio/traces`. Filters are endpoint,
+time, outcome, and label state. The public client does not add a list method.
+
 ## Delivery, quarantine and explicit recovery
 
 A worker starts lazily after admission or an explicit operation on an existing
@@ -215,7 +223,8 @@ numbers when exporting Python records. Export never
 removes records. Recovery ID sets must be unique and entirely quarantined or the
 transaction fails. Pending records cannot be discarded through this API. Corrected
 content must be logged as a new record/ID; the original is preserved until explicit
-discard. No server-side trace search/edit API is added.
+discard. Studio lists stored traces at `GET /v1/studio/traces` (endpoint, time,
+outcome, and label state). These recovery methods remain local spool operations.
 
 ## Lifecycle, snapshots and storage failures
 

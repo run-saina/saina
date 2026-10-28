@@ -889,10 +889,14 @@ traces.log(
     inputs,
     outcome=UNSET,
     metadata: Mapping[str, JSONValue] | None = None,
+    endpoint: str | None = None,
 ) -> str | None
 ```
 
-`UNSET` denotes omission; callers need not import it. Successful logging
+`UNSET` denotes omission; callers need not import it. `endpoint=None` omits the
+field. A supplied endpoint is a nonblank string and is copied into the schema 1.0
+record. JavaScript passes the same optional `endpoint` property on `log()`.
+Successful logging
 validates, copies, assigns a stable UUID, and commits locally before returning
 the ID. Returned IDs never represent unpersisted records. Return does not
 imply remote delivery.
@@ -1017,7 +1021,9 @@ file without deleting anything; `retry_rejected(ids)` retries unchanged quaranti
 records after the cause is fixed; `discard_rejected(ids)` explicitly removes only
 quarantined records after operator export/review. ID sets must be unique and
 entirely quarantined or the transaction fails. Corrected content uses a new ID.
-These are local outbox maintenance operations, not server search/edit APIs.
+These are local outbox maintenance operations. Studio lists stored traces at
+`GET /v1/studio/traces`, filtered by endpoint, time, outcome, and label state.
+This client does not call that route.
 
 ## 26. Flush and close
 
@@ -1196,7 +1202,8 @@ warn/recovery behavior, shutdown and ephemeral-filesystem limitations.
 The existing collection-based execution protocol remains unchanged. New logging
 uses `POST /v1/traces` with `schema_version="1.0"` and a `traces` array. Each record
 contains canonical UUID `trace_id`, timezone-aware logging `recorded_at`, `task`,
-`inputs`, optional `outcome`, and object `metadata`. It has no required collection,
+`inputs`, optional `outcome`, optional nonblank `endpoint`, and object `metadata`.
+`endpoint` is absent unless the caller supplied it. It has no required collection,
 source, execution status or duration. SDKs generate UUIDv7 IDs before local commit.
 
 Limits are 100 records, 1 MiB per compact UTF-8 record, 8 MiB summed record content,
@@ -1242,7 +1249,8 @@ Existing model, media, tokenization, and server dependencies remain optional.
 - Streaming inference or a Python async HTTP client.
 - Automatic provider instrumentation or execution timing.
 - Client-side inference caching.
-- Trace search, editing, or retrieval.
+- A public client method that lists, edits, or retrieves traces. The service lists
+  them at `GET /v1/studio/traces`.
 - Browser tracing without a specified persistence model.
 
 Existing account and compatibility methods are not removed.

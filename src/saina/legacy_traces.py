@@ -39,6 +39,29 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
+_TIMESTAMP = re.compile(
+    r'^(?P<y>\d{4})-(?P<m>\d{2})-(?P<d>\d{2})T(?P<H>\d{2}):(?P<M>\d{2}):(?P<S>\d{2})(?:\.(?P<f>\d{1,9}))?(?P<z>Z|[+-]\d{2}:\d{2})$'
+)
+
+
+def _timestamp(value):
+    """Keep a caller-supplied ISO 8601 timestamp that includes a timezone."""
+    match = _TIMESTAMP.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        raise ValueError('recorded_at must be an ISO 8601 timestamp with a timezone')
+    parts = match.groupdict()
+    try:
+        datetime(int(parts['y']), int(parts['m']), int(parts['d']), int(parts['H']), int(parts['M']), int(parts['S']))
+    except ValueError:
+        raise ValueError('recorded_at must be an ISO 8601 timestamp with a timezone') from None
+    zone = parts['z']
+    if zone != 'Z':
+        hours, minutes = int(zone[1:3]), int(zone[4:6])
+        if hours > 23 or minutes > 59:
+            raise ValueError('recorded_at must be an ISO 8601 timestamp with a timezone')
+    return value
+
+
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -46,14 +69,16 @@ class _NoRedirect(HTTPRedirectHandler):
 
 class DecisionTrace:
     """A single-use sync/async scope; only explicit inputs and answers are captured."""
-    def __init__(self, client, task, inputs, *, decision_id=None, metadata=None):
+    def __init__(self, client, task, inputs, *, decision_id=None, metadata=None, recorded_at=None):
         self.client = client
         if metadata is not None and not isinstance(metadata, dict):
             raise ValueError('Trace metadata must be an object')
+        # None keeps entry time. A supplied value is the simulated clock for replay.
+        self._recorded_at = None if recorded_at is None else _timestamp(recorded_at)
         self.decision_id = _id(decision_id or 'trace_' + uuid4().hex)
         self._record = {'schema_version': '1.0', 'decision_id': self.decision_id,
                         'task': _id(task), 'inputs': _snapshot(inputs),
-                        'metadata': _snapshot(metadata or {}), 'recorded_at': _now()}
+                        'metadata': _snapshot(metadata or {}), 'recorded_at': self._recorded_at or _now()}
         self._entered = self._finished = self._has_answer = False
 
     def set_answer(self, answer):
@@ -67,7 +92,8 @@ class DecisionTrace:
             raise RuntimeError('Decision scopes cannot be reused')
         self.client._check_open()
         self._entered = True
-        self._record['recorded_at'] = _now()
+        if self._recorded_at is None:
+            self._record['recorded_at'] = _now()
         self._started = time.perf_counter()
         return self
 
@@ -152,9 +178,9 @@ class TraceClient:
         except Exception:
             pass  # A telemetry error callback must never replace an application exception.
 
-    def decision(self, *, task, inputs, decision_id=None, metadata=None):
+    def decision(self, *, task, inputs, decision_id=None, metadata=None, recorded_at=None):
         self._check_open()
-        return DecisionTrace(self, task, inputs, decision_id=decision_id, metadata=metadata)
+        return DecisionTrace(self, task, inputs, decision_id=decision_id, metadata=metadata, recorded_at=recorded_at)
 
     def _enqueue(self, record):
         # DecisionTrace owns this finished record; inputs/answers were snapshotted

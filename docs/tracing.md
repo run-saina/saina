@@ -45,8 +45,14 @@ traces.close()
 ```
 
 Inputs and answers must be finite JSON data. They are copied when supplied, so later
-mutation of application objects does not change the evidence. An explicit `None`
-answer is valid; omitting `set_answer` produces an `incomplete` trace. Application
+mutation of application objects does not change the evidence. Optional `recorded_at`
+replays a benchmark on a simulated clock. It is an ISO 8601 timestamp with a
+timezone, such as `2020-01-02T03:04:05+00:00` or `2020-01-02T03:04:05.250Z`, and is
+kept exactly. A naive timestamp is rejected. When omitted, the scope records the
+clock at entry. JavaScript uses the same `recorded_at` option. `invoke_endpoint` /
+`invokeEndpoint` does not send it, and native `decide` keeps server time.
+
+An explicit `None` answer is valid; omitting `set_answer` produces an `incomplete` trace. Application
 exceptions propagate unchanged; the trace records the exception type, without its
 message or stack. Execution timing covers the scope, excluding background delivery.
 Redact sensitive content before supplying it; explicit inputs, answers and metadata
