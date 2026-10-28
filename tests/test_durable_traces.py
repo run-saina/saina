@@ -42,7 +42,7 @@ def test_lazy_commit_snapshot_omission_and_closed_behavior(tmp_path):
     b = t.log(task='second', inputs={}, outcome=None)
     rows = stored(t.spool_path)
     assert rows[0][0]['inputs'] == {'a':[1]}
-    assert 'outcome' not in rows[0][0] and rows[1][0]['outcome'] is None
+    assert 'outcome' not in rows[0][0] and 'endpoint' not in rows[0][0] and rows[1][0]['outcome'] is None
     assert [r[0]['trace_id'] for r in rows] == [a,b]
     assert t.pending == 2
     with sqlite3.connect(t.spool_path) as db:
@@ -143,6 +143,36 @@ def test_binding_mismatch_never_mixes_credentials_and_paths_are_hashed(tmp_path,
     for t in [a,b,c]:t.close(timeout=0)
 
 
+def test_admission_waits_out_a_peer_lock_longer_than_one_attempt(tmp_path):
+    # A commit that outlasts the 250 ms SQLite busy timeout must not drop the record.
+    path = tmp_path/'spool.db'
+    seed = quiet(recorder(tmp_path))
+    assert seed.log(task='seed', inputs={})
+    seed.close(timeout=0)
+    started = threading.Event()
+
+    def hold():
+        db = sqlite3.connect(path, timeout=5, isolation_level=None)
+        db.execute('BEGIN IMMEDIATE')
+        started.set()
+        time.sleep(.6)
+        db.commit()
+        db.close()
+
+    thread = threading.Thread(target=hold)
+    thread.start()
+    assert started.wait(2)
+    writer = quiet(recorder(tmp_path))
+    began = time.monotonic()
+    try:
+        assert writer.log(task='queued', inputs={})
+        assert time.monotonic() - began >= .4
+        assert len(stored(path)) == 2
+    finally:
+        writer.close(timeout=0)
+        thread.join(3)
+
+
 def test_crash_after_commit_and_concurrent_process_admission(tmp_path):
     code='''import os,sys
 from saina import Traces
@@ -184,11 +214,22 @@ def test_flush_snapshot_concurrent_admission_and_close_budget(tmp_path):
     assert not u._thread.is_alive()
 
 
-@pytest.mark.parametrize('kwargs', [dict(task='',inputs={}),dict(task='x',inputs={1:'bad'}),dict(task='x',inputs=float('nan')),dict(task='x',inputs=object()),dict(task='x',inputs='x'*(1<<20))])
+@pytest.mark.parametrize('kwargs', [dict(task='',inputs={}),dict(task='x',inputs={1:'bad'}),dict(task='x',inputs=float('nan')),dict(task='x',inputs=object()),dict(task='x',inputs='x'*(1<<20)),dict(task='x',inputs={},endpoint=1),dict(task='x',inputs={},endpoint=''),dict(task='x',inputs={},endpoint='  ')])
 def test_invalid_arguments_never_create_storage(tmp_path,kwargs):
     t=recorder(tmp_path)
     with pytest.raises((TypeError,ValueError)):t.log(**kwargs)
     assert not t.spool_path.exists();t.close(timeout=0)
+
+
+def test_optional_endpoint_is_sent_only_when_supplied(tmp_path):
+    t = quiet(recorder(tmp_path))
+    t.log(task='plain', inputs={})
+    t.log(task='named', inputs={}, endpoint='support-triage')
+    rows = stored(t.spool_path)
+    assert 'endpoint' not in rows[0][0]
+    assert rows[1][0]['endpoint'] == 'support-triage'
+    assert set(rows[0][0]) == {'trace_id', 'recorded_at', 'task', 'inputs', 'metadata'}
+    t.close(timeout=0)
 
 
 def test_explicit_quarantine_export_retry_and_discard(tmp_path):

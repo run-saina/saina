@@ -8,20 +8,39 @@ const identifier = value => {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_.-]{1,120}$/.test(value)) throw new TypeError('Use a stable identifier of 1–120 letters, digits, dots, underscores or hyphens');
   return value;
 };
+const timestampPattern = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/;
+const timestamp = value => {
+  const match = typeof value === 'string' ? timestampPattern.exec(value) : null;
+  if (!match) throw new TypeError('recorded_at must be an ISO 8601 timestamp with a timezone');
+  const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
+  const hour = Number(match[4]), minute = Number(match[5]), second = Number(match[6]);
+  const zone = match[8];
+  const probe = new Date(Date.UTC(year, month - 1, day));
+  const offsetHours = zone === 'Z' ? 0 : Number(zone.slice(1, 3));
+  const offsetMinutes = zone === 'Z' ? 0 : Number(zone.slice(4, 6));
+  if (hour > 23 || minute > 59 || second > 59 || offsetHours > 23 || offsetMinutes > 59 ||
+      probe.getUTCFullYear() !== year || probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== day) {
+    throw new TypeError('recorded_at must be an ISO 8601 timestamp with a timezone');
+  }
+  return value;
+};
 const snapshot = value => JSON.parse(JSON.stringify(value, (_key, v) => {
   if (v === undefined || typeof v === 'function' || typeof v === 'symbol' || typeof v === 'bigint' || (typeof v === 'number' && !Number.isFinite(v))) throw new TypeError('Trace values must be finite JSON data');
   return v;
 }));
 const bytes = value => new TextEncoder().encode(JSON.stringify(value)).length;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+let reportOutcomeWarned = false;
 
 export class DecisionTrace {
   #record; #finished = false; #hasAnswer = false;
-  constructor({task, inputs, decisionId, metadata = {}}) {
+  constructor({task, inputs, decisionId, metadata = {}, recorded_at} = {}) {
     if (metadata === null || typeof metadata !== 'object' || Array.isArray(metadata)) throw new TypeError('Trace metadata must be an object');
+    // Undefined keeps the current clock. A supplied value replays a simulated clock.
+    const recorded = recorded_at === undefined ? new Date().toISOString() : timestamp(recorded_at);
     this.decisionId = identifier(decisionId ?? 'trace_' + crypto.randomUUID().replaceAll('-', ''));
     this.#record = {schema_version: '1.0', decision_id: this.decisionId, task: identifier(task),
-      inputs: snapshot(inputs), metadata: snapshot(metadata), recorded_at: new Date().toISOString()};
+      inputs: snapshot(inputs), metadata: snapshot(metadata), recorded_at: recorded};
   }
   setAnswer(answer) {
     if (this.#finished) throw new Error('Decision scope is already finished');
@@ -148,11 +167,26 @@ export class TraceClient {
     this.#closing = true; clearTimeout(this.#timer); this.#timer = undefined;
     await this.flush(); this.#closed = true;
   }
-  async reportOutcome(decisionId, {values, eventId}) {
+  /**
+   * Record a business outcome: the business value of a decision, or a proxy for it
+   * (resolved, revenue, cost, CSAT). A business outcome is not a label.
+   * Posts to `/v1/studio/business-outcomes`. `/v1/studio/outcomes` remains a deprecated server alias.
+   */
+  async reportBusinessOutcome(decisionId, {values, eventId}) {
     this.#checkOpen();
     await this.flush();
-    return this.#post('/v1/studio/data/collections/' + encodeURIComponent(this.collection) + '/traces/' + encodeURIComponent(identifier(decisionId)) + '/outcomes',
-      {source: this.source, event_id: identifier(eventId), values: snapshot(values)}, true, true);
+    return this.#post('/v1/studio/business-outcomes', {
+      source: this.source, collection_id: this.collection, decision_id: identifier(decisionId),
+      event_id: identifier(eventId), values: snapshot(values),
+    }, true, true);
+  }
+  /** @deprecated Use {@link TraceClient#reportBusinessOutcome}. */
+  async reportOutcome(decisionId, businessOutcome) {
+    if (!reportOutcomeWarned) {
+      reportOutcomeWarned = true;
+      console.warn('TraceClient.reportOutcome() is deprecated; use reportBusinessOutcome().');
+    }
+    return this.reportBusinessOutcome(decisionId, businessOutcome);
   }
   async invokeEndpoint(endpoint, request, {version = 'production'} = {}) {
     this.#checkOpen();

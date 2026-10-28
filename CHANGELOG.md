@@ -1,7 +1,19 @@
 # Changelog
 
+## 1.0.0rc2 / JavaScript 1.0.0-rc.2
+
+- **Business outcomes.** Recording the business value of a decision (resolved, revenue, cost, CSAT — not a label) is `report_business_outcome` / `areport_business_outcome` in Python and `reportBusinessOutcome` in JavaScript. Requests go to `POST /v1/studio/business-outcomes` with `source`, `collection_id`, `decision_id`, `event_id`, and `values`. `POST /v1/studio/outcomes` remains a deprecated server alias. `report_outcome`, `areport_outcome`, and `reportOutcome` remain deprecated aliases that call the new methods (Python `DeprecationWarning`; JavaScript `@deprecated` and a one-time console warning).
+
 ## Unreleased — 1.0 client contract changes
 
+- Retry a transient SQLite lock while admitting a durable trace. One peer commit can outlast the 250 ms
+  lock attempt; that no longer drops the record in warn mode.
+- Optional `endpoint` on Python and Node.js `Traces.log()` for trace schema 1.0. The field is omitted when
+  unset, so existing callers stay compatible. Studio lists stored traces at `GET /v1/studio/traces`
+  (filters: endpoint, time, outcome, label state); the public client does not add a list method.
+- Optional `recorded_at` on `DecisionTrace` for benchmark replay on a simulated clock. The value must be
+  ISO 8601 with a timezone. `invoke_endpoint` / `invokeEndpoint` is unchanged, and native `decide` keeps
+  server time.
 - Fix concurrent first reads and durable logging losing admissions before the spool exists. Preserve
   numeric option-list order in JavaScript wire requests and retries. Add `Selections.get(id)` so
   arbitrary question IDs cannot shadow serialization methods. Include the new Python answer, contract,

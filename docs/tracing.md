@@ -34,8 +34,9 @@ def route_ticket(ticket, db, model_client, config):
     db.save_route(ticket["id"], answer, decision_id=trace.decision_id)
     return answer
 
-# When the result is known, reuse a stable event ID on retries.
-traces.report_outcome(
+# When the business value is known, reuse a stable event ID on retries.
+# A business outcome is resolved, revenue, cost, CSAT, or another proxy — not a label.
+traces.report_business_outcome(
     "trace_returned_decision_id",
     values={"resolved": True},
     event_id="ticket-48213-resolved",
@@ -45,15 +46,21 @@ traces.close()
 ```
 
 Inputs and answers must be finite JSON data. They are copied when supplied, so later
-mutation of application objects does not change the evidence. An explicit `None`
-answer is valid; omitting `set_answer` produces an `incomplete` trace. Application
+mutation of application objects does not change the evidence. Optional `recorded_at`
+replays a benchmark on a simulated clock. It is an ISO 8601 timestamp with a
+timezone, such as `2020-01-02T03:04:05+00:00` or `2020-01-02T03:04:05.250Z`, and is
+kept exactly. A naive timestamp is rejected. When omitted, the scope records the
+clock at entry. JavaScript uses the same `recorded_at` option. `invoke_endpoint` /
+`invokeEndpoint` does not send it, and native `decide` keeps server time.
+
+An explicit `None` answer is valid; omitting `set_answer` produces an `incomplete` trace. Application
 exceptions propagate unchanged; the trace records the exception type, without its
 message or stack. Execution timing covers the scope, excluding background delivery.
 Redact sensitive content before supplying it; explicit inputs, answers and metadata
 are stored in your collection. Use references for assets, not raw media bytes.
 
 For async applications, use `async with traces.decision(...)`, `await traces.aflush()`,
-`await traces.areport_outcome(...)`, and `await traces.aclose()`. The client itself
+`await traces.areport_business_outcome(...)`, and `await traces.aclose()`. The client itself
 also supports `with TraceClient(...)` and `async with TraceClient(...)` to flush on exit.
 
 ## TypeScript / JavaScript
@@ -84,11 +91,19 @@ async function routeTicket(ticket, db, modelClient, config) {
   return answer;
 }
 
-await traces.reportOutcome("trace_returned_decision_id", {
+await traces.reportBusinessOutcome("trace_returned_decision_id", {
   eventId: "ticket-48213-resolved", values: {resolved: true},
 });
 await traces.close();
 ```
+
+`report_business_outcome` / `areport_business_outcome` and `reportBusinessOutcome` send
+`POST /v1/studio/business-outcomes` with `source`, `collection_id`, `decision_id`,
+`event_id`, and `values`. Studio still accepts `POST /v1/studio/outcomes` as a deprecated
+server alias; this client does not call it. `report_outcome`, `areport_outcome`, and
+`reportOutcome` remain deprecated aliases that call the business-outcome methods. Python
+aliases emit `DeprecationWarning`. JavaScript `reportOutcome` is marked `@deprecated` and
+warns once on the console.
 
 `decision()` preserves the callback's return value and propagates its thrown value.
 Only `setAnswer()` defines the recorded answer; the return value is not captured
@@ -111,8 +126,8 @@ dropped trace counts, queued jobs and pending bytes. Graceful shutdown drains pe
 work within the shutdown deadline. Each persisted trace uses its original decision
 ID, so background retries do not duplicate evidence or repeat inference.
 
-Outcome reporting retries temporary not-found responses while native evidence is
-being persisted. If retries are exhausted, retry the outcome with the same event ID.
+Business outcome reporting retries temporary not-found responses while native evidence is
+being persisted. If retries are exhausted, retry the business outcome with the same event ID.
 `flush()` on the client waits for external SDK captures, not the server's native queue.
 
 ```python
@@ -121,7 +136,7 @@ decision = traces.invoke_endpoint(
     {"state": {"message": "I was charged twice"}},
     version="production",  # or an immutable positive endpoint version
 )
-traces.report_outcome(
+traces.report_business_outcome(
     decision["decision_id"], values={"resolved": True},
     event_id="ticket-48213-resolved",
 )
@@ -133,7 +148,7 @@ const decision = await traces.invokeEndpoint(
   {state: {message: "I was charged twice"}},
   {version: "production"},
 );
-await traces.reportOutcome(decision.decision_id, {
+await traces.reportBusinessOutcome(decision.decision_id, {
   eventId: "ticket-48213-resolved", values: {resolved: true},
 });
 ```
@@ -159,8 +174,8 @@ loss and regrouped retries safe. Changed evidence under the same identity confli
 Set `decision_id` / `decisionId` to a durable application identifier when replaying
 an event after restarting the process. Different sources have separate identities.
 
-Call `flush()` (Python async: `aflush()`) to wait for queued evidence. `report_outcome`
-/ `reportOutcome` flushes pending evidence before sending the observation. A failed
+Call `flush()` (Python async: `aflush()`) to wait for queued evidence. `report_business_outcome`
+/ `reportBusinessOutcome` flushes pending evidence before sending the business outcome. A failed
 batch stays queued; retry `flush()` using the same client. `close()` stops background
 delivery and flushes; retry it if delivery fails. Complete active scopes before closing.
 
@@ -174,7 +189,7 @@ Capture/delivery failures do not replace application exceptions or callback resu
 A full queue or oversized trace is dropped with an error notification. Inspect
 `pending_count`, `dropped_count`, `last_error` (TS: `pendingCount`, `droppedCount`,
 `lastError`) and configure `on_error` / `onError` for monitoring. Without a handler,
-failures emit a warning containing no payload. Explicit flush/close/outcome calls
+failures emit a warning containing no payload. Explicit flush, close, and business-outcome calls
 raise delivery errors. Scope-construction and `set_answer` validation errors raise
 immediately; supply only valid JSON.
 
@@ -196,13 +211,14 @@ API service. Use `https://api-staging.saina.run` for staging.
 ## Observe and prepare training examples
 
 Open **Studio → Observability → Decisions** to inspect captured external decisions,
-inputs, explicit answers, timing, errors, metadata and observed outcomes. The trace
+inputs, explicit answers, timing, errors, metadata and observed business outcomes. The trace
 links to its collection. External traces are marked as external and never presented
 as native model predictions with invented probabilities. Incomplete traces remain
 visible without counting as completed decisions.
 
-In **Data → Collections**, the original trace is immutable, and outcomes and labels
-are attached separately. Approve or correct targets through the existing labeling
+In **Data → Collections**, the original trace is immutable, and business outcomes and labels
+are attached separately. A business outcome is the business value of a decision, or a proxy
+for it (resolved, revenue, cost, CSAT). It is not a label. Approve or correct targets through the existing labeling
 workflow, then create an immutable dataset version. Map `prompt` to a suitable
 `raw.inputs` text field and `completion` to an approved `labels` field. Preserve
 related workflow groups in the same split. Dataset versions retain source record

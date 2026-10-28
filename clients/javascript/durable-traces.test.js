@@ -22,6 +22,7 @@ durableTest('lazy durable snapshots preserve omission and null and enforce close
   await t.log({task:'second',inputs:{},outcome:null});
   const check=new DatabaseSync(path);assert.equal(check.prepare('PRAGMA auto_vacuum').get().auto_vacuum,1);check.close();
   assert.deepEqual(rows(path)[0].payload.inputs,{a:[1]});assert.ok(!Object.hasOwn(rows(path)[0].payload,'outcome'));
+  assert.ok(!Object.hasOwn(rows(path)[0].payload,'endpoint'));
   assert.equal(rows(path)[1].payload.outcome,null);assert.equal(rows(path)[0].trace_id,id);
   const result=await t.flush({timeout:0});assert.equal(result.complete,false);assert.equal(result.pending,2);
   await t.close({timeout:0});await t.close();
@@ -109,7 +110,9 @@ durableTest('invalid JSON, explicit undefined and oversized records never create
  const dir=temporary(),path=dir+'/spool.db',t=new Traces(options(path));
  try{
   for(const record of [{task:'',inputs:{}},{task:'x',inputs:undefined},{task:'x',inputs:{},outcome:undefined},
-   {task:'x',inputs:{n:NaN}},{task:'x',inputs:'x'.repeat(1<<20)},{task:'x',inputs:'\ud800'}])assert.throws(()=>t.log(record));
+   {task:'x',inputs:{n:NaN}},{task:'x',inputs:'x'.repeat(1<<20)},{task:'x',inputs:'\ud800'},
+   {task:'x',inputs:{},endpoint:1},{task:'x',inputs:{},endpoint:''},{task:'x',inputs:{},endpoint:'  '},
+   {task:'x',inputs:{},endpoint:null},{task:'x',inputs:{},endpoint:undefined}])assert.throws(()=>t.log(record));
   assert.equal(existsSync(path),false);
  }finally{await t.close({timeout:0});rmSync(dir,{recursive:true,force:true});}
 });
@@ -141,6 +144,18 @@ durableTest('close cancels network work within its budget and flush targets a fi
   await u.log({task:'hang',inputs:{}});const pending=u.flush();await active;const before=Date.now();
   await u.close({timeout:.05});assert.ok(Date.now()-before<500);assert.equal((await pending).complete,false);
  }finally{release();await t.close({timeout:0});rmSync(dir,{recursive:true,force:true});}
+});
+
+durableTest('endpoint is omitted unless the caller supplies a nonblank string',async()=>{
+ const dir=temporary(),path=dir+'/spool.db',t=new Traces(options(path));
+ try{
+  await t.log({task:'plain',inputs:{}});
+  await t.log({task:'named',inputs:{},endpoint:'support-triage'});
+  const stored=rows(path);
+  assert.equal(Object.hasOwn(stored[0].payload,'endpoint'),false);
+  assert.equal(stored[1].payload.endpoint,'support-triage');
+  assert.deepEqual(Object.keys(stored[0].payload).sort(),['inputs','metadata','recorded_at','task','trace_id']);
+ }finally{await t.close({timeout:0});rmSync(dir,{recursive:true,force:true});}
 });
 
 durableTest('operator recovery exports quarantine and refuses to discard pending records',async()=>{

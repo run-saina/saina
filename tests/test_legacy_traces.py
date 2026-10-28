@@ -75,6 +75,26 @@ class TraceCapture(unittest.TestCase):
             c.close();record=post.call_args.args[1]['traces'][0]
             self.assertEqual(record['status'],'incomplete');self.assertNotIn('answer',record)
 
+    def test_recorded_at_replays_a_simulated_clock_and_rejects_naive_timestamps(self):
+        c=self.client();stamp='2020-01-02T03:04:05.250000+00:00'
+        with patch.object(c,'_post',side_effect=self.ack) as post:
+            with c.decision(task='route',inputs={},recorded_at=stamp) as trace:trace.set_answer('billing')
+            c.flush();record=post.call_args.args[1]['traces'][0]
+            self.assertEqual(record['recorded_at'],stamp)
+            self.assertNotEqual(record['completed_at'],stamp)
+            with c.decision(task='route',inputs={},recorded_at='2020-01-02T03:04:05Z') as trace:trace.set_answer('zulu')
+            c.flush();self.assertEqual(post.call_args.args[1]['traces'][0]['recorded_at'],'2020-01-02T03:04:05Z')
+            with c.decision(task='route',inputs={}) as trace:trace.set_answer('now')
+            c.flush();current=post.call_args.args[1]['traces'][0]['recorded_at']
+            self.assertRegex(current,r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:\d{2}$')
+        for bad in ('2020-01-02T03:04:05','2020-01-02','2020-13-01T00:00:00Z','2020-01-02T03:04:05+0000','2020-01-02 03:04:05Z',123,''):
+            with self.assertRaises(ValueError):c.decision(task='route',inputs={},recorded_at=bad)
+        with patch.object(c,'_post',return_value={'decision_id':'native'}) as post:
+            c.invoke_endpoint('support-triage',{'state':'Ticket'})
+            self.assertEqual(post.call_args.args[1],{'state':'Ticket','version':'production','trace_collection_id':'support'})
+            self.assertNotIn('recorded_at',post.call_args.args[1])
+        c.close()
+
     def test_native_endpoint_is_explicit_and_has_no_external_duplicate(self):
         c=self.client()
         with patch.object(c,'_post',return_value={'decision_id':'native'}) as post:
@@ -85,7 +105,7 @@ class TraceCapture(unittest.TestCase):
             self.assertEqual(c.pending_count,0)
         c.close()
 
-    def test_async_scopes_and_outcome_flush(self):
+    def test_async_scopes_and_business_outcome_flush(self):
         c=self.client()
         calls=[]
         def send(path,body,**kw):
@@ -93,9 +113,11 @@ class TraceCapture(unittest.TestCase):
         async def run():
             async with c:
                 async with c.decision(task='route',inputs={'x':1}) as t:t.set_answer('billing')
-                await c.areport_outcome(t.decision_id,values={'resolved':True},event_id='resolved1')
+                await c.areport_business_outcome(t.decision_id,values={'resolved':True},event_id='resolved1')
         with patch.object(c,'_post',side_effect=send):asyncio.run(run())
-        self.assertEqual(len(calls),2);self.assertTrue(calls[1][0].endswith('/outcomes'))
+        self.assertEqual(len(calls),2);self.assertEqual(calls[1][0],'/v1/studio/business-outcomes')
+        self.assertEqual(calls[1][1]['decision_id'],calls[0][1]['traces'][0]['decision_id'])
+        self.assertEqual(calls[1][1]['collection_id'],'support');self.assertEqual(calls[1][1]['values'],{'resolved':True})
 
     def test_real_http_retry_keeps_event_ids_and_authorization(self):
         requests=[]
@@ -162,7 +184,7 @@ class TraceCapture(unittest.TestCase):
             client.close()
         finally:server.shutdown();server.server_close();thread.join()
 
-    def test_native_outcome_retries_temporary_missing_evidence_without_reinvoking(self):
+    def test_native_business_outcome_retries_temporary_missing_evidence_without_reinvoking(self):
         requests=[]
         class Handler(BaseHTTPRequestHandler):
             def log_message(self,*args):pass
@@ -176,7 +198,27 @@ class TraceCapture(unittest.TestCase):
         client=self.client(base_url='http://127.0.0.1:'+str(server.server_port))
         try:
             decision=client.invoke_endpoint('support-triage',{'state':'Ticket'})
-            client.report_outcome(decision['decision_id'],values={'resolved':True},event_id='resolved')
+            client.report_business_outcome(decision['decision_id'],values={'resolved':True},event_id='resolved')
             self.assertEqual(sum(p.endswith('/decide') for p,b in requests),1)
-            self.assertEqual(requests[1],requests[2]);client.close()
+            self.assertEqual([p for p,b in requests if p=='/v1/studio/business-outcomes'],['/v1/studio/business-outcomes','/v1/studio/business-outcomes'])
+            self.assertEqual(requests[1],requests[2])
+            self.assertEqual(requests[1][1]['decision_id'],decision['decision_id'])
+            self.assertEqual(requests[1][1]['collection_id'],'support')
+            self.assertEqual(requests[1][1]['values'],{'resolved':True})
+            client.close()
         finally:server.shutdown();server.server_close();thread.join()
+
+    def test_deprecated_outcome_aliases_warn_and_record_business_outcomes(self):
+        c=self.client();calls=[]
+        def send(path,body,**kw):
+            calls.append((path,body));return {'id':'business-outcome'}
+        with patch.object(c,'_post',side_effect=send):
+            with self.assertWarns(DeprecationWarning):
+                c.report_outcome('trace_1',values={'csat':5},event_id='csat1')
+            async def run():
+                with self.assertWarns(DeprecationWarning):
+                    await c.areport_outcome('trace_1',values={'resolved':True},event_id='resolved1')
+            asyncio.run(run())
+        self.assertEqual(calls[0][0],'/v1/studio/business-outcomes')
+        self.assertEqual(calls[0][1],{'source':'application','collection_id':'support','decision_id':'trace_1','event_id':'csat1','values':{'csat':5}})
+        self.assertEqual(calls[1][1]['event_id'],'resolved1');self.assertEqual(calls[1][1]['values'],{'resolved':True})

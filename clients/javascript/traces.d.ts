@@ -6,8 +6,15 @@ export interface TraceOptions {
 }
 export interface DecisionTraceOptions {
   task: string; inputs: TraceJson; decisionId?: string; metadata?: Record<string, TraceJson>;
+  /** ISO 8601 timestamp with a timezone, for benchmark replay on a simulated clock. */
+  recorded_at?: string;
 }
 export class TraceDeliveryError extends Error { status?: number; code?: string; }
+/** Business value of a decision, or a proxy for it (resolved, revenue, cost, CSAT). Not a label. */
+export interface BusinessOutcome {
+  values: Record<string, TraceJson>;
+  eventId: string;
+}
 export class DecisionTrace {
   readonly decisionId: string;
   setAnswer(answer: TraceJson): void;
@@ -24,6 +31,8 @@ export class TraceClient {
   decision<T>(options: DecisionTraceOptions, fn: (trace: DecisionTrace) => T | Promise<T>): Promise<T>;
   flush(): Promise<void>;
   close(): Promise<void>;
-  reportOutcome(decisionId: string, outcome: {values: Record<string, TraceJson>; eventId: string}): Promise<Record<string, unknown>>;
+  reportBusinessOutcome(decisionId: string, businessOutcome: BusinessOutcome): Promise<Record<string, unknown>>;
+  /** @deprecated Use reportBusinessOutcome. */
+  reportOutcome(decisionId: string, outcome: BusinessOutcome): Promise<Record<string, unknown>>;
   invokeEndpoint(endpoint: string, request: {state?: TraceJson; questions?: Record<string, TraceJson>; images?: TraceJson[]; audios?: TraceJson[]}, options?: {version?: 'production' | number}): Promise<EndpointDecision>;
 }

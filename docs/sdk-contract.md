@@ -889,10 +889,14 @@ traces.log(
     inputs,
     outcome=UNSET,
     metadata: Mapping[str, JSONValue] | None = None,
+    endpoint: str | None = None,
 ) -> str | None
 ```
 
-`UNSET` denotes omission; callers need not import it. Successful logging
+`UNSET` denotes omission; callers need not import it. `endpoint=None` omits the
+field. A supplied endpoint is a nonblank string and is copied into the schema 1.0
+record. JavaScript passes the same optional `endpoint` property on `log()`.
+Successful logging
 validates, copies, assigns a stable UUID, and commits locally before returning
 the ID. Returned IDs never represent unpersisted records. Return does not
 imply remote delivery.
@@ -991,8 +995,9 @@ logs recovery and the episode's lost-record count at informational level.
 
 Python uses thread-owned, short-lived SQLite connections; JavaScript owns its
 connection on its Node event loop. Transactions coordinate capacity/admission and
-acknowledgment. Lock waits are bounded at 250 ms. Concurrent processes can share a
-spool with matching service/credential/capacity binding. Workers may redeliver the
+acknowledgment. Each SQLite lock attempt waits at most 250 ms. Python retries
+while another process commits, so a slow peer commit does not drop an admission.
+Concurrent processes can share a spool with matching service/credential/capacity binding. Workers may redeliver the
 same immutable record concurrently; tenant/trace-ID digest deduplication makes
 this safe. There is no crash lease delaying recovery or exclusive process owner.
 
@@ -1017,7 +1022,9 @@ file without deleting anything; `retry_rejected(ids)` retries unchanged quaranti
 records after the cause is fixed; `discard_rejected(ids)` explicitly removes only
 quarantined records after operator export/review. ID sets must be unique and
 entirely quarantined or the transaction fails. Corrected content uses a new ID.
-These are local outbox maintenance operations, not server search/edit APIs.
+These are local outbox maintenance operations. Studio lists stored traces at
+`GET /v1/studio/traces`, filtered by endpoint, time, outcome, and label state.
+This client does not call that route.
 
 ## 26. Flush and close
 
@@ -1042,7 +1049,8 @@ during close still raise after cleanup, and repeated close remains harmless.
 Python context management preserves an already-active application exception.
 
 Delivery/flush/close timeouts do not bound an unresponsive filesystem or OS DNS
-resolver; SQLite lock waits can additionally take up to 250 ms. Connected HTTP
+resolver; each SQLite lock attempt waits at most 250 ms, and Python retries while
+a peer holds the write lock. Connected HTTP
 bodies and fetches are interrupted on close. Python atexit and Node beforeExit
 attempt five-second best-effort shutdown; forced termination has no hook guarantee.
 
@@ -1196,7 +1204,8 @@ warn/recovery behavior, shutdown and ephemeral-filesystem limitations.
 The existing collection-based execution protocol remains unchanged. New logging
 uses `POST /v1/traces` with `schema_version="1.0"` and a `traces` array. Each record
 contains canonical UUID `trace_id`, timezone-aware logging `recorded_at`, `task`,
-`inputs`, optional `outcome`, and object `metadata`. It has no required collection,
+`inputs`, optional `outcome`, optional nonblank `endpoint`, and object `metadata`.
+`endpoint` is absent unless the caller supplied it. It has no required collection,
 source, execution status or duration. SDKs generate UUIDv7 IDs before local commit.
 
 Limits are 100 records, 1 MiB per compact UTF-8 record, 8 MiB summed record content,
@@ -1242,7 +1251,8 @@ Existing model, media, tokenization, and server dependencies remain optional.
 - Streaming inference or a Python async HTTP client.
 - Automatic provider instrumentation or execution timing.
 - Client-side inference caching.
-- Trace search, editing, or retrieval.
+- A public client method that lists, edits, or retrieves traces. The service lists
+  them at `GET /v1/studio/traces`.
 - Browser tracing without a specified persistence model.
 
 Existing account and compatibility methods are not removed.
