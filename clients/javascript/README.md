@@ -163,4 +163,7 @@ Use `TraceClient` to capture explicit decision inputs and answers from your own 
 observe them in Studio, and prepare datasets from collection evidence. Python supports
 sync/async context managers; TypeScript provides an async callback scope.
 `invoke_endpoint` / `invokeEndpoint` calls a Saina Decision Endpoint with one server-side trace.
+Business outcomes record the business value of a decision, or a proxy for it (resolved,
+revenue, cost, CSAT), not a label. `reportBusinessOutcome` posts them to
+`/v1/studio/business-outcomes`. `reportOutcome` remains a deprecated alias and warns once.
 See [decision trace collection](https://github.com/run-saina/saina/blob/staging/docs/tracing.md).

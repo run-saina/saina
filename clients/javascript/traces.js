@@ -14,6 +14,7 @@ const snapshot = value => JSON.parse(JSON.stringify(value, (_key, v) => {
 }));
 const bytes = value => new TextEncoder().encode(JSON.stringify(value)).length;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+let reportOutcomeWarned = false;
 
 export class DecisionTrace {
   #record; #finished = false; #hasAnswer = false;
@@ -148,11 +149,26 @@ export class TraceClient {
     this.#closing = true; clearTimeout(this.#timer); this.#timer = undefined;
     await this.flush(); this.#closed = true;
   }
-  async reportOutcome(decisionId, {values, eventId}) {
+  /**
+   * Record a business outcome: the business value of a decision, or a proxy for it
+   * (resolved, revenue, cost, CSAT). A business outcome is not a label.
+   * Posts to `/v1/studio/business-outcomes`. `/v1/studio/outcomes` remains a deprecated server alias.
+   */
+  async reportBusinessOutcome(decisionId, {values, eventId}) {
     this.#checkOpen();
     await this.flush();
-    return this.#post('/v1/studio/data/collections/' + encodeURIComponent(this.collection) + '/traces/' + encodeURIComponent(identifier(decisionId)) + '/outcomes',
-      {source: this.source, event_id: identifier(eventId), values: snapshot(values)}, true, true);
+    return this.#post('/v1/studio/business-outcomes', {
+      source: this.source, collection_id: this.collection, decision_id: identifier(decisionId),
+      event_id: identifier(eventId), values: snapshot(values),
+    }, true, true);
+  }
+  /** @deprecated Use {@link TraceClient#reportBusinessOutcome}. */
+  async reportOutcome(decisionId, businessOutcome) {
+    if (!reportOutcomeWarned) {
+      reportOutcomeWarned = true;
+      console.warn('TraceClient.reportOutcome() is deprecated; use reportBusinessOutcome().');
+    }
+    return this.reportBusinessOutcome(decisionId, businessOutcome);
   }
   async invokeEndpoint(endpoint, request, {version = 'production'} = {}) {
     this.#checkOpen();

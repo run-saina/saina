@@ -340,14 +340,33 @@ class TraceClient:
             self._notify(exc)
         return False
 
-    def report_outcome(self, decision_id, *, values, event_id):
+    def report_business_outcome(self, decision_id, *, values, event_id):
+        """Record the business value of a decision, or a proxy for it.
+
+        ``values`` holds measures such as resolved, revenue, cost, or CSAT.
+        A business outcome is not a label. The Studio route is
+        ``POST /v1/studio/business-outcomes``; ``POST /v1/studio/outcomes`` remains
+        a deprecated server alias and is not called by this client.
+        """
         self._check_open()
         self.flush()
-        return self._post('/v1/studio/data/collections/'+quote(self.collection, safe='')+'/traces/'+quote(_id(decision_id), safe='')+'/outcomes',
-                          {'source': self.source, 'event_id': _id(event_id), 'values': _snapshot(values)}, retry_not_found=True)
+        decision_id = _id(decision_id)
+        return self._post('/v1/studio/business-outcomes',
+                          {'source': self.source, 'collection_id': self.collection, 'decision_id': decision_id,
+                           'event_id': _id(event_id), 'values': _snapshot(values)}, retry_not_found=True)
+
+    def report_outcome(self, decision_id, *, values, event_id):
+        """Deprecated alias of :meth:`report_business_outcome`."""
+        warnings.warn('report_outcome() is deprecated; use report_business_outcome()', DeprecationWarning, stacklevel=2)
+        return self.report_business_outcome(decision_id, values=values, event_id=event_id)
+
+    async def areport_business_outcome(self, decision_id, *, values, event_id):
+        return await asyncio.to_thread(self.report_business_outcome, decision_id, values=values, event_id=event_id)
 
     async def areport_outcome(self, decision_id, *, values, event_id):
-        return await asyncio.to_thread(self.report_outcome, decision_id, values=values, event_id=event_id)
+        """Deprecated alias of :meth:`areport_business_outcome`."""
+        warnings.warn('areport_outcome() is deprecated; use areport_business_outcome()', DeprecationWarning, stacklevel=2)
+        return await self.areport_business_outcome(decision_id, values=values, event_id=event_id)
 
     def invoke_endpoint(self, endpoint, request, *, version='production'):
         """Explicit inference. Server captures exactly once; invocation is never retried."""
