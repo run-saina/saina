@@ -236,7 +236,7 @@ export class Traces {
   readonly capacity: number;
   readonly pending: Promise<number>;
   readonly lastError: Error | null;
-  log(record: {task: string; inputs: Json; outcome?: Json; metadata?: Record<string, Json> | null}): Promise<string | null>;
+  log(record: {task: string; inputs: Json; outcome?: Json; metadata?: Record<string, Json> | null; endpoint?: string}): Promise<string | null>;
   flush(options?: {timeout?: number}): Promise<TraceFlushResult>;
   close(options?: {timeout?: number}): Promise<void>;
   exportRejected(path: string): Promise<number>;

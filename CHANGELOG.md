@@ -2,6 +2,14 @@
 
 ## Unreleased — 1.0 client contract changes
 
+- Retry a transient SQLite lock while admitting a durable trace. One peer commit can outlast the 250 ms
+  lock attempt; that no longer drops the record in warn mode.
+- Optional `endpoint` on Python and Node.js `Traces.log()` for trace schema 1.0. The field is omitted when
+  unset, so existing callers stay compatible. Studio lists stored traces at `GET /v1/studio/traces`
+  (filters: endpoint, time, outcome, label state); the public client does not add a list method.
+- Optional `recorded_at` on `DecisionTrace` for benchmark replay on a simulated clock. The value must be
+  ISO 8601 with a timezone. `invoke_endpoint` / `invokeEndpoint` is unchanged, and native `decide` keeps
+  server time.
 - Fix concurrent first reads and durable logging losing admissions before the spool exists. Preserve
   numeric option-list order in JavaScript wire requests and retries. Add `Selections.get(id)` so
   arbitrary question IDs cannot shadow serialization methods. Include the new Python answer, contract,

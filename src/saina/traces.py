@@ -29,6 +29,14 @@ _UNSET = object()
 _MAX_RECORD = 1 << 20
 _MAX_BATCH = 8 << 20
 _APP_ID = 0x5341494E
+# One SQLite lock attempt stays at 250 ms. Admission repeats that attempt while a
+# peer still holds the write lock, so a slow commit does not drop the record.
+_LOCK_WAIT = .25
+_ADMISSION_WAIT = 5
+_LOCK_ERRORS = frozenset({
+    sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED,
+    sqlite3.SQLITE_BUSY_TIMEOUT, sqlite3.SQLITE_BUSY_SNAPSHOT,
+})
 
 
 @dataclass(frozen=True)
@@ -36,6 +44,12 @@ class TraceFlushResult:
     complete: bool
     pending: int
     rejected: int = 0
+
+
+def _storage_error(exc):
+    error = SpoolFullError('Trace spool is full') if getattr(exc, 'sqlite_errorcode', None) == sqlite3.SQLITE_FULL else TraceStorageError('Trace storage is unavailable')
+    error.category = (type(exc).__name__, getattr(exc, 'sqlite_errorcode', getattr(exc, 'errno', None)))
+    return error
 
 
 def _budget(value):
@@ -121,74 +135,92 @@ class Traces:
         if self._state != 'open':
             raise RuntimeError('Trace recorder is closed')
 
+    def _begin(self, create):
+        """Return a connection inside the caller's transaction, or None when there is nothing to read."""
+        db = None
+        try:
+            if self._initialized:
+                stat = self.spool_path.stat()
+                if (stat.st_dev, stat.st_ino) != self._identity:
+                    raise TraceStorageError('Spool file was replaced')
+            if not self.spool_path.exists() and not create:
+                return None
+            if not self.spool_path.parent.exists():
+                self.spool_path.parent.mkdir(parents=True, mode=0o700)
+            if not self.spool_path.exists():
+                try:
+                    fd = os.open(self.spool_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                except FileExistsError:
+                    pass
+                else:
+                    os.close(fd)
+            db = sqlite3.connect(self.spool_path, timeout=_LOCK_WAIT, isolation_level=None)
+            db.execute('PRAGMA synchronous=FULL')
+            if not self._initialized:
+                # auto_vacuum must be enabled outside a transaction, before any tables.
+                if (db.execute('PRAGMA application_id').fetchone()[0] in (0, _APP_ID) and
+                        not db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()):
+                    db.execute('PRAGMA auto_vacuum=FULL')
+                db.execute('BEGIN IMMEDIATE')
+                app = db.execute('PRAGMA application_id').fetchone()[0]
+                tables = db.execute("select name from sqlite_master where type='table'").fetchall()
+                if app not in (0, _APP_ID) or app == 0 and tables:
+                    raise TraceStorageError('Path contains a different database')
+                if db.execute('PRAGMA journal_mode').fetchone()[0] != 'delete':
+                    raise TraceStorageError('Spool must use SQLite DELETE journaling')
+                if db.execute('PRAGMA auto_vacuum').fetchone()[0] != 1:
+                    raise TraceStorageError('Unsupported spool vacuum mode')
+                if db.execute('PRAGMA page_size').fetchone()[0] != 4096:
+                    raise TraceStorageError('Unsupported spool page size')
+                db.execute(f'PRAGMA max_page_count={(self.capacity + (2 << 20)) // 4096}')
+                db.execute('CREATE TABLE IF NOT EXISTS settings(name TEXT PRIMARY KEY,value TEXT NOT NULL)')
+                db.execute("CREATE TABLE IF NOT EXISTS records(seq INTEGER PRIMARY KEY AUTOINCREMENT,trace_id TEXT UNIQUE NOT NULL,payload TEXT NOT NULL,size INTEGER NOT NULL,state TEXT NOT NULL DEFAULT 'pending',error TEXT)")
+                old = db.execute("SELECT value FROM settings WHERE name='binding'").fetchone()
+                if old is not None and old[0] != self._binding:
+                    raise TraceStorageError('Spool belongs to a different service or credential')
+                db.execute("INSERT OR IGNORE INTO settings VALUES('binding',?)", (self._binding,))
+                old_capacity = db.execute("SELECT value FROM settings WHERE name='capacity'").fetchone()
+                if old_capacity is not None and int(old_capacity[0]) != self.capacity:
+                    raise TraceStorageError('Spool capacity differs from its existing configuration')
+                db.execute("INSERT OR IGNORE INTO settings VALUES('capacity',?)", (str(self.capacity),))
+                db.execute("INSERT OR IGNORE INTO settings SELECT 'used',coalesce(sum(size+256),0) FROM records")
+                db.execute("CREATE TRIGGER IF NOT EXISTS record_admitted AFTER INSERT ON records BEGIN UPDATE settings SET value=cast(value AS INTEGER)+new.size+256 WHERE name='used'; END")
+                db.execute("CREATE TRIGGER IF NOT EXISTS record_removed AFTER DELETE ON records BEGIN UPDATE settings SET value=cast(value AS INTEGER)-old.size-256 WHERE name='used'; END")
+                db.execute('CREATE INDEX IF NOT EXISTS records_state_seq ON records(state,seq)')
+                db.execute(f'PRAGMA application_id={_APP_ID}')
+                db.commit()
+                stat = self.spool_path.stat()
+                self._identity = (stat.st_dev, stat.st_ino)
+                self._initialized = True
+            # Every connection sets this limit; it is not a persistent PRAGMA.
+            db.execute(f'PRAGMA max_page_count={(self.capacity + (2 << 20)) // 4096}')
+            db.execute('BEGIN IMMEDIATE')
+            opened, db = db, None
+            return opened
+        finally:
+            if db is not None:
+                db.close()
+
     @contextmanager
     def _db(self, create=True):
         with self._io:
-            db = None
+            deadline = time.monotonic() + _ADMISSION_WAIT
+            while True:
+                try:
+                    db = self._begin(create)
+                    break
+                except (OSError, sqlite3.Error) as exc:
+                    # A peer commit can outlast one 250 ms lock wait. Retrying the
+                    # attempt keeps concurrent admission from dropping the record.
+                    if getattr(exc, 'sqlite_errorcode', None) not in _LOCK_ERRORS or time.monotonic() >= deadline:
+                        raise _storage_error(exc) from None
+                    time.sleep(.02)
             try:
-                if self._initialized:
-                    stat = self.spool_path.stat()
-                    if (stat.st_dev, stat.st_ino) != self._identity:
-                        raise TraceStorageError('Spool file was replaced')
-                if not self.spool_path.exists() and not create:
-                    yield None
-                    return
-                if not self.spool_path.parent.exists():
-                    self.spool_path.parent.mkdir(parents=True, mode=0o700)
-                if not self.spool_path.exists():
-                    try:
-                        fd = os.open(self.spool_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-                    except FileExistsError:
-                        pass
-                    else:
-                        os.close(fd)
-                db = sqlite3.connect(self.spool_path, timeout=.25, isolation_level=None)
-                db.execute('PRAGMA synchronous=FULL')
-                if not self._initialized:
-                    # auto_vacuum must be enabled outside a transaction, before any tables.
-                    if (db.execute('PRAGMA application_id').fetchone()[0] in (0, _APP_ID) and
-                            not db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()):
-                        db.execute('PRAGMA auto_vacuum=FULL')
-                    db.execute('BEGIN IMMEDIATE')
-                    app = db.execute('PRAGMA application_id').fetchone()[0]
-                    tables = db.execute("select name from sqlite_master where type='table'").fetchall()
-                    if app not in (0, _APP_ID) or app == 0 and tables:
-                        raise TraceStorageError('Path contains a different database')
-                    if db.execute('PRAGMA journal_mode').fetchone()[0] != 'delete':
-                        raise TraceStorageError('Spool must use SQLite DELETE journaling')
-                    if db.execute('PRAGMA auto_vacuum').fetchone()[0] != 1:
-                        raise TraceStorageError('Unsupported spool vacuum mode')
-                    if db.execute('PRAGMA page_size').fetchone()[0] != 4096:
-                        raise TraceStorageError('Unsupported spool page size')
-                    db.execute(f'PRAGMA max_page_count={(self.capacity + (2 << 20)) // 4096}')
-                    db.execute('CREATE TABLE IF NOT EXISTS settings(name TEXT PRIMARY KEY,value TEXT NOT NULL)')
-                    db.execute("CREATE TABLE IF NOT EXISTS records(seq INTEGER PRIMARY KEY AUTOINCREMENT,trace_id TEXT UNIQUE NOT NULL,payload TEXT NOT NULL,size INTEGER NOT NULL,state TEXT NOT NULL DEFAULT 'pending',error TEXT)")
-                    old = db.execute("SELECT value FROM settings WHERE name='binding'").fetchone()
-                    if old is not None and old[0] != self._binding:
-                        raise TraceStorageError('Spool belongs to a different service or credential')
-                    db.execute("INSERT OR IGNORE INTO settings VALUES('binding',?)", (self._binding,))
-                    old_capacity = db.execute("SELECT value FROM settings WHERE name='capacity'").fetchone()
-                    if old_capacity is not None and int(old_capacity[0]) != self.capacity:
-                        raise TraceStorageError('Spool capacity differs from its existing configuration')
-                    db.execute("INSERT OR IGNORE INTO settings VALUES('capacity',?)", (str(self.capacity),))
-                    db.execute("INSERT OR IGNORE INTO settings SELECT 'used',coalesce(sum(size+256),0) FROM records")
-                    db.execute("CREATE TRIGGER IF NOT EXISTS record_admitted AFTER INSERT ON records BEGIN UPDATE settings SET value=cast(value AS INTEGER)+new.size+256 WHERE name='used'; END")
-                    db.execute("CREATE TRIGGER IF NOT EXISTS record_removed AFTER DELETE ON records BEGIN UPDATE settings SET value=cast(value AS INTEGER)-old.size-256 WHERE name='used'; END")
-                    db.execute('CREATE INDEX IF NOT EXISTS records_state_seq ON records(state,seq)')
-                    db.execute(f'PRAGMA application_id={_APP_ID}')
-                    db.commit()
-                    stat = self.spool_path.stat()
-                    self._identity = (stat.st_dev, stat.st_ino)
-                    self._initialized = True
-                # Every connection sets this limit; it is not a persistent PRAGMA.
-                db.execute(f'PRAGMA max_page_count={(self.capacity + (2 << 20)) // 4096}')
-                db.execute('BEGIN IMMEDIATE')
                 yield db
-                db.commit()
+                if db is not None:
+                    db.commit()
             except (OSError, sqlite3.Error) as exc:
-                error = SpoolFullError('Trace spool is full') if getattr(exc, 'sqlite_errorcode', None) == sqlite3.SQLITE_FULL else TraceStorageError('Trace storage is unavailable')
-                error.category = (type(exc).__name__, getattr(exc, 'sqlite_errorcode', getattr(exc, 'errno', None)))
-                raise error from None
+                raise _storage_error(exc) from None
             finally:
                 if db is not None:
                     db.close()
@@ -214,16 +246,21 @@ class Traces:
         self._failures += 1
         return None
 
-    def log(self, *, task, inputs, outcome=_UNSET, metadata=None):
+    def log(self, *, task, inputs, outcome=_UNSET, metadata=None, endpoint=None):
+        """Commit one schema 1.0 record. ``endpoint`` is omitted when unset."""
         with self._condition:
             self._check()
             if not isinstance(task, str): raise TypeError('task must be a string')
             if not task.strip() or len(task) > 1024: raise ValueError('task must be nonblank and at most 1024 characters')
             if metadata is not None and not isinstance(metadata, Mapping):
                 raise TypeError('metadata must be a mapping')
+            if endpoint is not None:
+                if not isinstance(endpoint, str): raise TypeError('endpoint must be a string')
+                if not endpoint.strip(): raise ValueError('endpoint must be a nonblank string')
             record = dict(trace_id=new_idempotency_key(), recorded_at=datetime.now(timezone.utc).isoformat(),
                           task=task, inputs=inputs, metadata={} if metadata is None else metadata)
             if outcome is not _UNSET: record['outcome'] = outcome
+            if endpoint is not None: record['endpoint'] = endpoint
             json_value(record)
             record = json_copy(record)
             _depth(record)

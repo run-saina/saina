@@ -115,16 +115,22 @@ export class Traces {
   }
   log(record = {}) {
     this.#check();
-    if (!record || typeof record !== 'object' || Array.isArray(record) || Object.keys(record).some(k => !['task', 'inputs', 'outcome', 'metadata'].includes(k))) throw new TypeError('Invalid trace arguments');
+    if (!record || typeof record !== 'object' || Array.isArray(record) || Object.keys(record).some(k => !['task', 'inputs', 'outcome', 'metadata', 'endpoint'].includes(k))) throw new TypeError('Invalid trace arguments');
     const {task, inputs, metadata = null} = record;
     const outcome = Object.hasOwn(record, 'outcome') ? record.outcome : unset;
+    const endpoint = Object.hasOwn(record, 'endpoint') ? record.endpoint : unset;
     if (Object.hasOwn(record, 'metadata') && record.metadata === undefined) throw new TypeError('metadata must be JSON data');
     // Argument snapshots happen before the first asynchronous storage operation.
     if (typeof task !== 'string') throw new TypeError('task must be a string');
     if (!task.trim() || [...task].length > 1024) throw new RangeError('task must be nonblank and at most 1024 characters');
     if (metadata !== null && (typeof metadata !== 'object' || Array.isArray(metadata))) throw new TypeError('metadata must be an object');
+    if (endpoint !== unset) {
+      if (typeof endpoint !== 'string') throw new TypeError('endpoint must be a string');
+      if (!endpoint.trim()) throw new RangeError('endpoint must be a nonblank string');
+    }
     const row = {trace_id: newIdempotencyKey(), recorded_at: new Date().toISOString(), task, inputs, metadata: metadata ?? {}};
     if (outcome !== unset) row.outcome = outcome;
+    if (endpoint !== unset) row.endpoint = endpoint;
     jsonValue(row); depth(row);
     const payload = JSON.stringify(row), size = new TextEncoder().encode(payload).length;
     if (size > MAX_RECORD) throw new RangeError('Trace exceeds 1 MiB; use asset references');

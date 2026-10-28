@@ -75,6 +75,26 @@ class TraceCapture(unittest.TestCase):
             c.close();record=post.call_args.args[1]['traces'][0]
             self.assertEqual(record['status'],'incomplete');self.assertNotIn('answer',record)
 
+    def test_recorded_at_replays_a_simulated_clock_and_rejects_naive_timestamps(self):
+        c=self.client();stamp='2020-01-02T03:04:05.250000+00:00'
+        with patch.object(c,'_post',side_effect=self.ack) as post:
+            with c.decision(task='route',inputs={},recorded_at=stamp) as trace:trace.set_answer('billing')
+            c.flush();record=post.call_args.args[1]['traces'][0]
+            self.assertEqual(record['recorded_at'],stamp)
+            self.assertNotEqual(record['completed_at'],stamp)
+            with c.decision(task='route',inputs={},recorded_at='2020-01-02T03:04:05Z') as trace:trace.set_answer('zulu')
+            c.flush();self.assertEqual(post.call_args.args[1]['traces'][0]['recorded_at'],'2020-01-02T03:04:05Z')
+            with c.decision(task='route',inputs={}) as trace:trace.set_answer('now')
+            c.flush();current=post.call_args.args[1]['traces'][0]['recorded_at']
+            self.assertRegex(current,r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:\d{2}$')
+        for bad in ('2020-01-02T03:04:05','2020-01-02','2020-13-01T00:00:00Z','2020-01-02T03:04:05+0000','2020-01-02 03:04:05Z',123,''):
+            with self.assertRaises(ValueError):c.decision(task='route',inputs={},recorded_at=bad)
+        with patch.object(c,'_post',return_value={'decision_id':'native'}) as post:
+            c.invoke_endpoint('support-triage',{'state':'Ticket'})
+            self.assertEqual(post.call_args.args[1],{'state':'Ticket','version':'production','trace_collection_id':'support'})
+            self.assertNotIn('recorded_at',post.call_args.args[1])
+        c.close()
+
     def test_native_endpoint_is_explicit_and_has_no_external_duplicate(self):
         c=self.client()
         with patch.object(c,'_post',return_value={'decision_id':'native'}) as post:
