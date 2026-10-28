@@ -244,4 +244,4 @@ export class Traces {
   discardRejected(traceIds: string[]): Promise<number>;
 }
 
-export type {TraceJson, TraceOptions, DecisionTraceOptions, EndpointDecision} from './traces.js';
+export type {TraceJson, TraceOptions, DecisionTraceOptions, EndpointDecision, BusinessOutcome} from './traces.js';

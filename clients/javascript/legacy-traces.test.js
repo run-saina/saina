@@ -77,12 +77,14 @@ test('native endpoint invocation is explicit, never retried, and not captured tw
   fail(1);await assert.rejects(client.invokeEndpoint('support-triage',{state:'Ticket'}));assert.equal(requests.length,2);
 });
 
-test('outcomes flush first and concurrent flushes do not send a batch twice',async t=>{
+test('business outcomes flush first and concurrent flushes do not send a batch twice',async t=>{
   const {client,requests}=await fixture(t);let id;
   await client.decision({task:'route',inputs:{}},trace=>{id=trace.decisionId;trace.setAnswer(null);});
   await Promise.all([client.flush(),client.flush()]);assert.equal(requests.length,1);
-  await client.reportOutcome(id,{eventId:'resolved1',values:{resolved:true}});
-  assert(requests[1].path.endsWith('/'+id+'/outcomes'));assert.equal(requests[1].body.values.resolved,true);
+  await client.reportBusinessOutcome(id,{eventId:'resolved1',values:{resolved:true}});
+  assert.equal(requests[1].path,'/v1/studio/business-outcomes');
+  assert.equal(requests[1].body.decision_id,id);assert.equal(requests[1].body.collection_id,'support');
+  assert.equal(requests[1].body.values.resolved,true);
 });
 
 test('background delivery reports errors and recovers on close',async t=>{
@@ -118,11 +120,29 @@ test('failed full batches wait before background redelivery instead of spinning'
   fail(0);await client.close();assert.equal(client.pendingCount,0);
 });
 
-test('immediate native outcomes retry temporary missing evidence without invoking again',async t=>{
+test('immediate native business outcomes retry temporary missing evidence without invoking again',async t=>{
   const {client,requests,fail}=await fixture(t,{failureStatus:404});
   const decision=await client.invokeEndpoint('support-triage',{state:'Ticket'});
-  fail(1);await client.reportOutcome(decision.decision_id,{eventId:'resolved',values:{resolved:true}});
+  fail(1);await client.reportBusinessOutcome(decision.decision_id,{eventId:'resolved',values:{resolved:true}});
   assert.equal(requests.filter(r=>r.path.endsWith('/decide')).length,1);
-  const outcomes=requests.filter(r=>r.path.endsWith('/outcomes'));
-  assert.equal(outcomes.length,2);assert.deepEqual(outcomes[0].body,outcomes[1].body);
+  const businessOutcomes=requests.filter(r=>r.path==='/v1/studio/business-outcomes');
+  assert.equal(businessOutcomes.length,2);assert.deepEqual(businessOutcomes[0].body,businessOutcomes[1].body);
+  assert.equal(businessOutcomes[0].body.decision_id,decision.decision_id);
+  assert.equal(businessOutcomes[0].body.collection_id,'support');
+});
+
+test('reportOutcome warns once and calls reportBusinessOutcome',async t=>{
+  const {client,requests}=await fixture(t);let id;
+  await client.decision({task:'route',inputs:{}},trace=>{id=trace.decisionId;trace.setAnswer(true);});
+  await client.flush();
+  const warnings=[];const original=console.warn;
+  console.warn=message=>warnings.push(String(message));
+  t.after(()=>{console.warn=original;});
+  await client.reportOutcome(id,{eventId:'resolved1',values:{resolved:true}});
+  await client.reportOutcome(id,{eventId:'revenue1',values:{revenue:10}});
+  assert.equal(warnings.length,1);
+  assert.match(warnings[0],/reportBusinessOutcome/);
+  const recorded=requests.filter(r=>r.path==='/v1/studio/business-outcomes');
+  assert.equal(recorded.length,2);assert.equal(recorded[1].body.values.revenue,10);
+  assert.equal(recorded[1].body.decision_id,id);
 });

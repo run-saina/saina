@@ -13,7 +13,7 @@ from .answers import (YesNoAnswer, SingleChoiceAnswer, RatingAnswer, MultiChoice
                       Selections, YesNoSelection, SingleChoiceSelection, RatingSelection,
                       MultiChoiceSelection, SelectionReason)
 from .traces import Traces, TraceFlushResult, TraceClient, DecisionTrace, TraceDeliveryError
-__version__ = '1.0.0rc1'
+__version__ = '1.0.0rc2'
 
 def register_transformers():
     from .transformers import register

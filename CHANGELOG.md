@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.0rc2 / JavaScript 1.0.0-rc.2
+
+- **Business outcomes.** Recording the business value of a decision (resolved, revenue, cost, CSAT — not a label) is `report_business_outcome` / `areport_business_outcome` in Python and `reportBusinessOutcome` in JavaScript. Requests go to `POST /v1/studio/business-outcomes` with `source`, `collection_id`, `decision_id`, `event_id`, and `values`. `POST /v1/studio/outcomes` remains a deprecated server alias. `report_outcome`, `areport_outcome`, and `reportOutcome` remain deprecated aliases that call the new methods (Python `DeprecationWarning`; JavaScript `@deprecated` and a one-time console warning).
+
 ## Unreleased — 1.0 client contract changes
 
 - Retry a transient SQLite lock while admitting a durable trace. One peer commit can outlast the 250 ms
