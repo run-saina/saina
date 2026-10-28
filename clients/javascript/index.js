@@ -1,3 +1,9 @@
+export {Traces} from './durable-traces.js';
+export {TraceClient, DecisionTrace, TraceDeliveryError} from './traces.js';
+import {Answers, validateTyped} from './answers.js';
+import {nativeRequest, normalizeRequest, flattenExtra, requestFields, questionFields, jsonValue, stringifyRequest} from './validation.js';
+export {Answers, Selections, YesNoAnswer, SingleChoiceAnswer, RatingAnswer, MultiChoiceAnswer, YesNoSelection, SingleChoiceSelection, RatingSelection, MultiChoiceSelection} from './answers.js';
+
 export const DEFAULT_BASE_URL = 'https://api.saina.run';
 
 /** Credit fields: decimal strings holding 64-bit integers, parsed to BigInt. */
@@ -19,7 +25,7 @@ export function newIdempotencyKey() {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-export class SainaHelmError extends Error {
+export class SainaError extends Error {
   constructor(message, status, details = {}) {
     super(message);
     this.name = new.target.name;
@@ -31,21 +37,59 @@ export class SainaHelmError extends Error {
     this.retry = details.retry ?? null;
     this.retryAfter = details.retryAfter ?? null; // seconds
     this.suspension = details.suspension ?? null;
+    this.raw = details.raw ?? null;
+    this.fields = details.fields ?? {};
   }
 }
 
-/** The connection failed, timed out, or the response was cut off; the outcome may be unknown. */
-export class SainaConnectionError extends SainaHelmError {}
-
+export class HTTPError extends SainaError {}
+export class AuthenticationError extends HTTPError {}
+export class PermissionDeniedError extends HTTPError {}
+export class NotFoundError extends HTTPError {}
+export class InvalidRequestError extends HTTPError {}
+export class RateLimitError extends HTTPError {}
+export class IdempotencyError extends HTTPError {}
+export class ServerError extends HTTPError {}
+export class ModelBusyError extends ServerError {}
+export class TransportError extends SainaError {
+  constructor(message, status, details = {}) { super(message, status, details); this.timedOut = details.timedOut ?? false; }
+}
+export class ProtocolError extends SainaError {}
+export class SpoolFullError extends SainaError {}
+export class TraceStorageError extends SainaError {}
+export const SainaHelmError = SainaError;
+export const SainaConnectionError = TransportError;
+const codeParents = {
+  invalid_api_key: AuthenticationError,
+  key_revoked: AuthenticationError,
+  fresh_auth_required: AuthenticationError,
+  permission_denied: PermissionDeniedError,
+  account_suspended: PermissionDeniedError,
+  not_found: NotFoundError,
+  invalid_request: InvalidRequestError,
+  rate_limited: RateLimitError,
+  insufficient_credits: HTTPError,
+  idempotency_conflict: IdempotencyError,
+  request_in_progress: IdempotencyError,
+  idempotency_result_expired: IdempotencyError,
+  idempotency_unverifiable: IdempotencyError,
+  inference_failed: ServerError,
+  accounting_unavailable: ServerError,
+  overloaded: ModelBusyError,
+  inference_unavailable: ModelBusyError,
+};
+const statusClass = status => ({401: AuthenticationError, 403: PermissionDeniedError, 404: NotFoundError,
+  422: InvalidRequestError, 429: RateLimitError, 503: ModelBusyError}[status] ??
+  (status >= 500 && status < 600 ? ServerError : HTTPError));
 const pascal = code => code.split('_').map(p => p[0].toUpperCase() + p.slice(1)).join('');
-/** Error class per contract code; every class extends SainaHelmError. */
+/** Error class per contract code; classes inherit their broad HTTP category. */
 export const ERROR_CLASSES = Object.freeze(Object.fromEntries([
   'invalid_api_key', 'key_revoked', 'account_suspended', 'insufficient_credits', 'invalid_request',
   'rate_limited', 'overloaded', 'inference_failed', 'inference_unavailable', 'accounting_unavailable',
   'idempotency_conflict', 'request_in_progress', 'idempotency_result_expired', 'idempotency_unverifiable',
   'fresh_auth_required', 'permission_denied', 'not_found'
 ].map(code => {
-  const cls = {[pascal(code)]: class extends SainaHelmError { static code = code; }}[pascal(code)];
+  const cls = {[pascal(code)]: class extends codeParents[code] { static code = code; }}[pascal(code)];
   return [code, cls];
 })));
 export const {
@@ -96,13 +140,13 @@ function httpError(status, text, headers) {
   const error = body && typeof body === 'object' ? body.error : null;
   if (!error || typeof error !== 'object' || typeof error.code !== 'string') {
     const detail = body && typeof body.detail === 'string' && body.detail ? `: ${body.detail.slice(0, 500)}` : '';
-    return [new SainaHelmError(`Saina HTTP ${status}${detail}`, status, {requestId, retryAfter}), false];
+    return [new (statusClass(status))(`Saina HTTP ${status}${detail}`, status, {requestId, retryAfter, raw: body, fields: error}), false];
   }
   const message = typeof error.message === 'string' && error.message ? `: ${error.message.slice(0, 500)}` : '';
-  const Cls = Object.hasOwn(ERROR_CLASSES, error.code) ? ERROR_CLASSES[error.code] : SainaHelmError;
+  const Cls = Object.hasOwn(ERROR_CLASSES, error.code) ? ERROR_CLASSES[error.code] : statusClass(status);
   return [new Cls(`Saina HTTP ${status} ${error.code}${message}`, status, {
     code: error.code, requestId: error.request_id ?? requestId, admitted: error.admitted, state: error.state,
-    retry: error.retry, retryAfter, suspension: error.suspension
+    retry: error.retry, retryAfter, suspension: error.suspension, raw: body, fields: error
   }), true];
 }
 
@@ -173,6 +217,11 @@ async function withMedia(request, fetchImpl) {
   return out;
 }
 
+function validateIdempotencyKey(key) {
+  if (key != null && (typeof key !== 'string' || key.length !== 36 || !UUID7.test(key.toLowerCase())))
+    throw new TypeError('idempotencyKey must be a UUIDv7 string; use newIdempotencyKey()');
+}
+
 class Uncertain { constructor(error, retryAfter = null) { this.error = error; this.retryAfter = retryAfter; } }
 
 export class SainaHelm {
@@ -181,12 +230,18 @@ export class SainaHelm {
    * {idempotencyKey} per call, or set autoIdempotencyKey so each logical call gets one new UUIDv7 key that
    * every retry of that call reuses with the identical body. Read-only account calls retry without a key.
    */
-  constructor({baseUrl = DEFAULT_BASE_URL, apiKey, timeout = 60000, fetch: fetchImpl = globalThis.fetch,
-               maxRetries = 2, maxRetryDelay = 30000, autoIdempotencyKey = false, sleep, random} = {}) {
+  constructor({baseUrl, apiKey, timeout, allowHttp = false, fetch: fetchImpl = globalThis.fetch,
+               maxRetries = 2, maxRetryDelay = 30000, autoIdempotencyKey = true, sleep, random} = {}) {
+    const env = globalThis.process?.env ?? {};
+    baseUrl ??= env.SAINA_BASE_URL ?? DEFAULT_BASE_URL;
+    apiKey ??= env.SAINA_API_KEY;
+    timeout ??= env.SAINA_TIMEOUT === undefined ? 60000 : Number(env.SAINA_TIMEOUT) * 1000;
+    if (typeof baseUrl !== 'string' || /\s/.test(baseUrl)) throw new TypeError('Invalid service URL');
+    if (typeof allowHttp !== 'boolean' || typeof autoIdempotencyKey !== 'boolean') throw new TypeError('Boolean options required');
     const url = new URL(baseUrl);
-    if (!(url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) || url.username || url.password || url.search || url.hash)
+    if (!(url.protocol === 'https:' || (url.protocol === 'http:' && (allowHttp || ['localhost', '[::1]'].includes(url.hostname) || /^127(?:\.\d{1,3}){3}$/.test(url.hostname)))) || url.username || url.password || url.search || url.hash)
       throw new TypeError('Use HTTPS, or HTTP on localhost; no credentials/query in URL');
-    if (typeof apiKey !== 'string' || !apiKey || /[\r\n]/.test(apiKey)) throw new TypeError('API key required');
+    if (typeof apiKey !== 'string' || !apiKey.trim() || /[\r\n]/.test(apiKey)) throw new TypeError('API key required');
     if (!Number.isFinite(timeout) || timeout <= 0) throw new TypeError('Positive timeout required');
     if (!Number.isInteger(maxRetries) || maxRetries < 0) throw new TypeError('maxRetries must be a nonnegative integer');
     if (!Number.isFinite(maxRetryDelay) || maxRetryDelay < 0) throw new TypeError('maxRetryDelay must be nonnegative');
@@ -200,47 +255,52 @@ export class SainaHelm {
   async ask(request, options) { return (await this.askWithMetadata(request, options)).result; }
 
   async askWithMetadata(request, {idempotencyKey} = {}) {
-    if (!request || !request.questions || !Object.keys(request.questions).length)
-      throw new TypeError('At least one typed question is required');
-    request = await withMedia(request, this.fetch);
+    validateIdempotencyKey(idempotencyKey);
+    request = await withMedia(nativeRequest(request), this.fetch);
     const {result, metadata} = await this.#post('/v1/ask', request, idempotencyKey);
-    validateAnswers(request, result);
+    validateTyped(request, result);
+    const bodyId = result.request_id;
+    if (bodyId != null && (typeof bodyId !== 'string' || !bodyId.trim())) throw new ProtocolError('Invalid request ID');
+    if (bodyId != null && metadata.requestId != null && bodyId !== metadata.requestId)
+      throw new ProtocolError('Body and header request IDs disagree');
+    metadata.requestId = bodyId ?? metadata.requestId;
+    if (typeof metadata.requestId !== 'string' || !metadata.requestId.trim()) throw new ProtocolError('Typed answers require a request ID');
+    const typed = new Answers(result, metadata, request.questions);
+    this.lastMetadata = typed.metadata;
+    return {result: typed, metadata: typed.metadata};
+  }
+
+  async decisions(request, options) { return (await this.decisionsWithMetadata(request, options)).result; }
+
+  async decisionsWithMetadata(request, {idempotencyKey} = {}) {
+    validateIdempotencyKey(idempotencyKey);
+    if (!Array.isArray(request?.questions) || !request.questions.length)
+      throw new TypeError('At least one question is required');
+    request = flattenExtra(request, requestFields);
+    request.questions = request.questions.map(q => flattenExtra(q, questionFields));
+    const {result, metadata} = await this.#post('/v1/decisions', request, idempotencyKey);
+    const probability = v => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
+    if (typeof result?.model !== 'string' || !Array.isArray(result.answers) ||
+        result.answers.length !== request.questions.length || result.answers.some((a, i) =>
+          !a || a.name !== (request.questions[i].name ?? null) || ![request.questions[i].type, 'refusal'].includes(a.type) ||
+          a.type === 'predicate' && !probability(a.probability) ||
+          ['choice', 'score'].includes(a.type) && (!Array.isArray(a.probabilities) || !probability(a.confidence))))
+      throw new ProtocolError('Invalid Decisions response');
     return {result, metadata};
   }
 
   async systemOne(request, options) { return (await this.systemOneWithMetadata(request, options)).result; }
 
   async systemOneWithMetadata(request, {idempotencyKey} = {}) {
+    validateIdempotencyKey(idempotencyKey);
     if (!request || !request.questions || !Object.keys(request.questions).length)
       throw new TypeError('At least one question is required');
-    request = await withMedia(request, this.fetch);
+    request = await withMedia(normalizeRequest(request), this.fetch);
     const {result, metadata} = await this.#post('/v1/systemone', request, idempotencyKey);
     const keys = Object.keys(request.questions);
     if (!result || typeof result.model !== 'string' || !result.answers || typeof result.answers !== 'object' ||
         Object.keys(result.answers).length !== keys.length || !keys.every(k => Object.hasOwn(result.answers, k)))
-      throw new SainaHelmError('Invalid System One response');
-    return {result, metadata};
-  }
-
-  /** POST /v1/decisions in the OpenAI Decisions shape: `input` plus a `questions` array (predicate, choice, score).
-   * Answers come back in question order. Saina extensions: `mode: 'decision'` with `threshold`/`min_margin`
-   * (unaccepted answers become billed `refusal` entries) and `specialist`. */
-  async decisions(request, options) { return (await this.decisionsWithMetadata(request, options)).result; }
-
-  async decisionsWithMetadata(request, {idempotencyKey} = {}) {
-    if (!request || !Array.isArray(request.questions) || !request.questions.length)
-      throw new TypeError('At least one question is required');
-    const {result, metadata} = await this.#post('/v1/decisions', request, idempotencyKey);
-    const probability = v => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
-    const ok = result && typeof result.model === 'string' && Array.isArray(result.answers) &&
-      result.answers.length === request.questions.length &&
-      request.questions.every((q, i) => {
-        const a = result.answers[i];
-        return a && a.name === (q.name ?? null) && (a.type === q.type || a.type === 'refusal') &&
-          (a.type !== 'predicate' || probability(a.probability)) &&
-          (!['choice', 'score'].includes(a.type) || (Array.isArray(a.probabilities) && probability(a.confidence)));
-      });
-    if (!ok) throw new SainaHelmError('Invalid Decisions response');
+      throw new ProtocolError('Invalid System One response');
     return {result, metadata};
   }
 
@@ -253,9 +313,9 @@ export class SainaHelm {
 
   async #post(path, request, idempotencyKey) {
     if (idempotencyKey == null && this.autoIdempotencyKey) idempotencyKey = newIdempotencyKey(); // once per call
-    if (idempotencyKey != null && (typeof idempotencyKey !== 'string' || !UUID7.test(idempotencyKey.toLowerCase())))
-      throw new TypeError('idempotencyKey must be a UUIDv7 string; use newIdempotencyKey()');
-    const body = JSON.stringify(request); // serialized once: every retry sends identical bytes
+    validateIdempotencyKey(idempotencyKey);
+    jsonValue(request);
+    const body = stringifyRequest(request); // serialized once: every retry sends identical bytes
     const headers = {'Content-Type': 'application/json'};
     if (idempotencyKey != null) headers['Idempotency-Key'] = idempotencyKey;
     const out = await this.#call('POST', path, body, headers, idempotencyKey ?? null, idempotencyKey != null, JSON.parse);
@@ -299,49 +359,31 @@ export class SainaHelm {
 
   async #attempt(method, path, body, headers, parse) {
     // Connection loss, timeout, or a body cut off: the outcome is unknown.
-    const lost = () => { throw new Uncertain(new SainaConnectionError('Saina connection failed or timed out')); };
+    const lost = error => { throw new Uncertain(new TransportError('Saina connection failed or timed out', undefined, {timedOut: error?.name === 'TimeoutError'})); };
     let response, text;
     try {
       response = await this.fetch(`${this.baseUrl}${path}`, {
         method, redirect: 'error', signal: AbortSignal.timeout(this.timeout), headers, body
       });
-    } catch { lost(); }
+    } catch (error) { lost(error); }
     if (!response.ok) {
       try { text = await response.text(); } catch { text = ''; }
       const [error, typed] = httpError(response.status, text, response.headers);
       if (retryable(error) || (response.status >= 500 && !typed)) throw new Uncertain(error, error.retryAfter);
       throw error;
     }
-    try { text = await response.text(); } catch { lost(); }
+    try { text = await response.text(); } catch (error) { lost(error); }
     try { return {result: parse(text), response}; }
     catch (e) {
       if (e instanceof SainaHelmError) throw e;
-      throw new Uncertain(new SainaHelmError('Invalid JSON response'));
+      throw new ProtocolError('Invalid JSON response');
     }
   }
 }
 
-export { SainaHelm as Saina, SainaHelmError as SainaError };
+export { SainaHelm as Saina };
 
-function validateAnswers(request, result) {
-  const probability = v => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
-  const fail = () => { throw new SainaHelmError('Invalid typed answer response'); };
-  if (!result || typeof result.model !== 'string' || !result.answers ||
-      Object.keys(result.answers).length !== Object.keys(request.questions).length) fail();
-  for (const [key, q] of Object.entries(request.questions)) {
-    const a = Object.hasOwn(result.answers, key) && result.answers[key];
-    if (!a || a.type !== q.type) fail();
-    const labels = q.type === 'yes_no' ? ['yes', 'no'] : q.type === 'rating' ? q.levels.map((_, i) => String(i)) : Object.keys(q.options);
-    const vector = q.type === 'yes_no' ? {yes: a.yes, no: a.no} : q.type === 'multi_choice' ? a.memberships : a.probabilities;
-    if (!vector || Object.keys(vector).length !== labels.length || !labels.every(k => Object.hasOwn(vector, k) && probability(vector[k]))) fail();
-    if (q.type !== 'multi_choice' && (Math.abs(labels.reduce((s, k) => s + vector[k], 0) - 1) > 1e-5 || !probability(a.confidence))) fail();
-    if (q.type === 'single_choice' && !(labels.includes(a.selection) || request.mode === 'decision' && a.selection === null)) fail();
-    if (q.type === 'rating' && (typeof a.expected_level !== 'number' || !Number.isFinite(a.expected_level) || a.expected_level < 0 || a.expected_level > labels.length - 1 || !Array.isArray(a.levels) || a.levels.length !== labels.length)) fail();
-    if (request.mode === 'decision') {
-      if (!['accepted', 'below_threshold', 'below_margin', 'tie'].includes(a.reason)) fail();
-      if (q.type === 'yes_no' && !(a.selected === null || typeof a.selected === 'boolean')) fail();
-      if (q.type === 'rating' && !(a.level === null || Number.isInteger(a.level) && a.level >= 0 && a.level < labels.length)) fail();
-      if (q.type === 'multi_choice' && (!Array.isArray(a.selections) || new Set(a.selections).size !== a.selections.length || !a.selections.every(k => labels.includes(k)))) fail();
-    }
-  }
+/** JSON serialization that preserves arbitrary credit amounts as decimal strings. */
+export function stringifyCredits(value) {
+  return JSON.stringify(value, (_key, item) => typeof item === 'bigint' ? item.toString() : item);
 }

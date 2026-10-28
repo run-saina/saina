@@ -47,26 +47,34 @@ For guided launch and the browser interface, see Local playground below.
 ```python
 from saina import Saina
 
-client = Saina('https://your-endpoint.example', api_key='YOUR_KEY')
-
-result = client.ask(
-    model='saina-helm',  # whichever Helm the endpoint serves; or pin 'saina-helm-2-0.8b'
-    state='I was charged twice.',
+# Set SAINA_API_KEY in the environment.
+client = Saina()
+ticket = {'id': 'ticket-123', 'text': 'I was charged twice. Please refund the duplicate charge.'}
+answers = client.ask(
+    model='saina-helm-2-0.8b',
+    state=ticket,
     questions={
-        'issue': {
+        'team': {
             'type': 'single_choice',
-            'question': 'Identify the banking issue.',
-            'options': {
-                'duplicate': 'duplicate charge',
-                'delivery': 'card delivery',
-            },
+            'question': 'Which team should handle this?',
+            'options': ['billing', 'support', 'legal'],
         },
     },
 )
+team = answers['team'].select(threshold=0.9)
+
+# Application-provided actions:
+if team.accepted:
+    assign_ticket(ticket, team=team.value)
+else:
+    queue_for_review(ticket)
 ```
 
 Keep credentials in environment variables or a secret manager, not source files.
-The base URL defaults to Saina's hosted API, `https://api.saina.run`; pass your own for a self-hosted server.
+The base URL resolves from `SAINA_BASE_URL`, defaulting to `https://api.saina.run`. Explicit configuration
+wins over environment variables. `SAINA_TIMEOUT` is in seconds (default 60); non-loopback HTTP URLs require
+`allow_http=True`. Self-hosted servers must provide request IDs for typed inference responses.
+See [migration notes](MIGRATION.md) for the 0.9.3-to-1.0 changes and server requirements.
 
 ### Hosted API: idempotency, retries, errors, credits
 
@@ -75,24 +83,33 @@ import os
 from saina import Saina, new_idempotency_key
 from saina.client import InsufficientCredits
 
-client = Saina(api_key=os.environ['SAINA_API_KEY'], auto_idempotency_key=True)
-result, meta = client.ask_with_metadata(model='saina-helm', state='...', questions={...})
+client = Saina(api_key=os.environ['SAINA_API_KEY'])
+result, meta = client.ask_with_metadata(
+    model='saina-helm', state='Refund my payment.',
+    questions={'refund': {'type': 'yes_no', 'question': 'Is a refund requested?'}},
+)
 meta.credits_charged, meta.balance, meta.request_id, meta.replayed  # ints, str, bool
 client.balance()['available']                                       # int
 client.usage(from_='2026-10-01'); client.requests(limit=50)
 ```
 
-- **Idempotency.** Inference is retried automatically only with an `Idempotency-Key` (a UUIDv7): pass
-  `idempotency_key=new_idempotency_key()` or set `auto_idempotency_key=True`. Every retry of a call reuses its
-  key and identical body bytes, so it cannot run or charge twice; the client never makes a new key for a retry.
+- **Idempotency.** Inference is retried automatically only with an `Idempotency-Key` (a UUIDv7):
+  one key is generated per logical call by default. A caller-provided `idempotency_key` takes precedence.
+  Set `auto_idempotency_key=False` to disable generation; inference then retries only with an explicit key.
+  Every retry reuses its key and identical body bytes. Duplicate execution and billing protection require
+  server support; see [migration and server compatibility](MIGRATION.md).
 - **Retries** (`max_retries=2`, total wait capped by `max_retry_delay=30` s) only on connection loss or an
   uncertain response, `accounting_unavailable`, `request_in_progress`, `rate_limited`, and
   `overloaded`/`inference_unavailable` when the request was not admitted, honoring `Retry-After`.
 - **Errors.** `SainaError` carries `status`, `code`, `request_id`, `admitted`, `state`, `retry`, `retry_after`
   and `suspension`, with a subclass per code (`InsufficientCredits`, `RateLimited`, `IdempotencyConflict`, ...;
-  see `saina.client.ERROR_CLASSES`).
+  see `saina.ERROR_CLASSES`). Broad categories such as `AuthenticationError`, `RateLimitError`,
+  `IdempotencyError`, and `ServerError` can catch related codes. Unknown codes use the HTTP status category;
+  `.fields` and `.raw` preserve the complete server error.
 - **Credits** are 64-bit integers sent as decimal strings; Python returns `int`, JavaScript `BigInt`.
-  `ask` still returns the same response dict; billing headers are in `ask_with_metadata` and `client.last_metadata`.
+  `ask` returns an immutable `Answers` mapping from question ID to typed answer with `.metadata`, `.raw`, `to_dict()` and `to_json()`.
+  Python serialization emits integer credits; `.raw` retains the original decimal strings.
+  `ask_with_metadata()` remains available and returns `(answers, answers.metadata)`.
 
 ## Model names
 
@@ -351,6 +368,48 @@ No training datasets, private history, model weights, or credentials are include
 For integration support and developer enquiries, email [dev@saina.run](mailto:dev@saina.run).
 
 
+### Request extensions
+
+The `extra` dictionary is flattened into each outgoing question or the top-level request. For example,
+`{"type": "single_choice", "question": "Team?", "options": ["billing", "support"],
+"extra": {"new_server_feature": True}}` sends an options dictionary and `new_server_feature` at the
+question level. No nested `extra` is sent. Extensions cannot override known fields, including omitted
+optional fields; collisions raise `ValueError` before media downloads or API requests.
+
+`decisions()` and `decisions_with_metadata()` call `/v1/decisions` with `input` and an ordered list of
+`predicate`, `choice`, or `score` questions, following the repository's Decisions shim contract. They use
+the same idempotency and retry defaults. This endpoint requires a server that implements that shim.
+
+
+### Typed answers and local selection
+
+`Answers` is an immutable mapping: `answers['team']`, `len(answers)`, and `answers.items()` operate on
+questions. Request details are attributes: `.request_id`, `.model`, `.specialist`, `.usage`, and `.metadata`.
+`dict(answers)` contains typed values; `to_dict()` recursively serializes them. `.raw` returns an independent
+copy of the original response, retaining unknown fields.
+
+Call `answer.select(threshold=..., min_margin=...)` or `answers.select(...)` to apply local requirements.
+Check `.accepted` and read `.value` and `.reason`. Threshold is checked before ties and margins. Rating
+and multi-choice ignore margins; ratings return integer indices and `.label`, while multi-choice returns
+an ordered tuple and uses `no_options_selected` when nothing qualifies. Native `ask()` always requests
+distributions; the existing remote `decisions()` endpoint retains its server behavior.
+
+### Durable external logs
+
+```python
+from saina import Traces
+
+with Traces() as traces:
+    trace_id = traces.log(task='route ticket', inputs={'ticket': 'Charged twice'},
+                          outcome={'team': 'billing'}, metadata={'application': 'support'})
+    delivery = traces.flush(timeout=5)
+```
+
+A returned ID means SQLite persistence completed; default warn-mode storage failure returns `None`.
+Records remain until server acknowledgment, with rejected records quarantined for explicit recovery.
+The matching backend exposes `POST /v1/traces`. The existing `TraceClient` execution-scope API remains
+available. See [durability, paths, recovery and lifecycle](docs/durable-traces.md) and the
+[agreed SDK contract](docs/sdk-contract.md). Inference creates no background worker or spool.
 ### Local playground
 
 ```sh
@@ -404,3 +463,11 @@ are checked before loading models.
 
 Exit codes: 0 success, 1 setup/integrity/runtime failure, 2 invalid arguments,
 130 cancelled. See [validation](docs/local-validation.md) and [Mac instructions](docs/mac-test.md).
+
+## Decision trace collection
+
+Use `TraceClient` to capture explicit decision inputs and answers from your own code,
+observe them in Studio, and prepare datasets from collection evidence. Python supports
+sync/async context managers; TypeScript provides an async callback scope.
+`invoke_endpoint` / `invokeEndpoint` calls a Saina Decision Endpoint with one server-side trace.
+See [decision trace collection](docs/tracing.md).

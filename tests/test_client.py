@@ -10,11 +10,11 @@ from unittest.mock import Mock
 from urllib.error import HTTPError, URLError
 from saina.client import (SainaHelm, SainaHelmError, SainaError, SainaConnectionError, new_idempotency_key,
                           InsufficientCredits, InferenceFailed, IdempotencyConflict, AccountingUnavailable,
-                          Overloaded, AccountSuspended, ERROR_CLASSES, DEFAULT_BASE_URL)
+                          Overloaded, AccountSuspended, ModelBusyError, ERROR_CLASSES, DEFAULT_BASE_URL)
 
 ASK = dict(model='saina-helm-0.8b', state='text',
            questions={'q': {'type': 'yes_no', 'question': 'Yes?'}})
-RESULT = {'model': 'saina-helm-0.8b', 'answers': {'q': {'type': 'yes_no', 'yes': .7, 'no': .3, 'confidence': .4}},
+RESULT = {'request_id': 'req_9', 'model': 'saina-helm-0.8b', 'answers': {'q': {'type': 'yes_no', 'yes': .7, 'no': .3, 'confidence': .4}},
           'usage': {'input_tokens': 3, 'output_tokens': 0}}
 KEY = '01890a5d-ac96-774b-bcce-b302099a8057'
 
@@ -68,24 +68,22 @@ class ClientTests(unittest.TestCase):
         c=SainaHelm('https://example.com',api_key='test')
         c._opener=Mock()
         request=dict(model='saina-helm-0.8b',state='text',questions={'tags':{'type':'multi_choice','question':'Tags?','options':{'a':None,'b':None}}})
-        result={'model':'saina-helm-0.8b','answers':{'tags':{'type':'multi_choice','memberships':{'a':.9,'b':.8}}},'usage':{'input_tokens':1,'output_tokens':0}}
+        result={'request_id':'req_1','model':'saina-helm-0.8b','answers':{'tags':{'type':'multi_choice','memberships':{'a':.9,'b':.8}}},'usage':{'input_tokens':1,'output_tokens':0}}
         def reply(req, **kwargs):
             self.assertEqual(req.full_url,'https://example.com/v1/ask')
             self.assertEqual(json.loads(req.data),dict(**request,mode='distribution'))
             return io.BytesIO(json.dumps(result).encode())
         c._opener.open.side_effect=reply
-        self.assertEqual(c.ask(**request),result)
+        self.assertEqual(c.ask(**request).raw,result)
         for answers in [{}, {'tags':{'type':'yes_no','yes':.9,'no':.1}}, {'tags':{'type':'multi_choice','memberships':{'a':float('nan'),'b':.8}}}]:
             result['answers']=answers
             with self.assertRaises(SainaHelmError): c.ask(**request)
 
-    def test_decision_request(self):
-        c=SainaHelm('https://example.com',api_key='test')
-        c._opener=Mock()
-        result={'model':'saina-helm-0.8b','answers':{'q':{'type':'yes_no','yes':.1,'no':.9,'confidence':.8,'selected':False,'reason':'accepted'}}}
-        c._opener.open.side_effect=lambda *a,**k:io.BytesIO(json.dumps(result).encode())
-        c.ask(model='saina-helm-0.8b',state='text',mode='decision',threshold=.85,questions={'q':{'type':'yes_no','question':'Yes?'}})
-        self.assertEqual(json.loads(c._opener.open.call_args.args[0].data)['threshold'],.85)
+    def test_decision_arguments_require_local_selection(self):
+        c = client()
+        with self.assertRaises(TypeError):
+            c.ask(**ASK, mode='decision', threshold=.85)
+        self.assertEqual(c._opener.requests, [])
 
     def test_url(self):
         with self.assertRaises(ValueError): SainaHelm('http://example.com',api_key='test')
@@ -111,7 +109,7 @@ class IdempotencyKeyTests(unittest.TestCase):
 
 class RetryTests(unittest.TestCase):
     def test_no_key_no_retry(self):
-        c = client(fail(503, error('accounting_unavailable', admitted=True, state='unknown', retry='same_operation')))
+        c = client(fail(503, error('accounting_unavailable', admitted=True, state='unknown', retry='same_operation')), auto_idempotency_key=False)
         with self.assertRaises(AccountingUnavailable): c.ask(**ASK)
         self.assertEqual(len(c._opener.requests), 1)
         self.assertNotIn('Idempotency-key', c._opener.requests[0].headers)
@@ -121,7 +119,7 @@ class RetryTests(unittest.TestCase):
                    Reply(RESULT, X_Request_Id='req_9', X_Saina_Credits_Charged='3',
                          X_Saina_Balance='9007199254740993', X_Saina_Price_Version='1', X_Saina_Replayed='true'))
         result, meta = c.ask_with_metadata(**ASK, idempotency_key=KEY)
-        self.assertEqual(result, RESULT)
+        self.assertEqual(result.raw, RESULT)
         sent = c._opener.requests
         self.assertEqual(len(sent), 3)
         self.assertEqual({r.get_header('Idempotency-key') for r in sent}, {KEY})
@@ -133,7 +131,7 @@ class RetryTests(unittest.TestCase):
 
     def test_auto_key_generated_once(self):
         c = client(fail(500, raw=b'<html>'), Reply(RESULT), auto_idempotency_key=True)
-        self.assertEqual(c.ask(**ASK), RESULT)
+        self.assertEqual(c.ask(**ASK).raw, RESULT)
         keys = [r.get_header('Idempotency-key') for r in c._opener.requests]
         self.assertEqual(len(keys), 2)
         self.assertEqual(keys[0], keys[1])
@@ -155,7 +153,7 @@ class RetryTests(unittest.TestCase):
     def test_overloaded_retried_when_not_admitted(self):
         c = client(fail(429, error('overloaded', admitted=False, state='not_admitted', retry='same_operation'), Retry_After='2'),
                    fail(503, error('inference_unavailable', admitted=False)), Reply(RESULT))
-        self.assertEqual(c.ask(**ASK, idempotency_key=KEY), RESULT)
+        self.assertEqual(c.ask(**ASK, idempotency_key=KEY).raw, RESULT)
         self.assertEqual(c.sleeps, [2, 1.0])
 
     def test_bounded_retries(self):
@@ -177,9 +175,9 @@ class RetryTests(unittest.TestCase):
         self.assertIsInstance(e, SainaHelmError)
 
     def test_legacy_and_unparseable_errors(self):
-        c = client(fail(503, raw=json.dumps({'detail': 'Model is busy'}).encode()))
+        c = client(fail(503, raw=json.dumps({'detail': 'Model is busy'}).encode()), auto_idempotency_key=False)
         with self.assertRaises(SainaError) as caught: c.ask(**ASK)
-        self.assertEqual((type(caught.exception), caught.exception.status, caught.exception.code), (SainaError, 503, None))
+        self.assertEqual((type(caught.exception), caught.exception.status, caught.exception.code), (ModelBusyError, 503, None))
         self.assertIn('Model is busy', str(caught.exception))
         c = client(fail(401, raw=b'nope'))
         with self.assertRaises(SainaError) as caught: c.ask(**ASK)
@@ -190,6 +188,12 @@ class RetryTests(unittest.TestCase):
 
 
 class AccountTests(unittest.TestCase):
+    def test_balance_preserves_nested_credit_breakdown(self):
+        breakdown = {'free': '0', 'free_expires_at': None, 'plan': '0',
+                     'plan_expires_at': None, 'purchased': '9007199254740993'}
+        c = client(Reply({'balance': '9007199254740993', 'credits': breakdown}))
+        self.assertEqual(c.balance(), {'balance': 9007199254740993, 'credits': breakdown})
+
     def test_credit_strings_become_ints(self):
         big = '18446744073709551615'
         c = client(Reply({'account_id': 'acc', 'balance': big, 'reserved': '0', 'available': big,

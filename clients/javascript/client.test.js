@@ -4,7 +4,7 @@ import {SainaHelm, Saina, SainaError, SainaConnectionError, newIdempotencyKey, p
   InsufficientCredits, InferenceFailed, IdempotencyConflict, AccountingUnavailable, AccountSuspended, Overloaded,
   RequestInProgress, RateLimited, ERROR_CLASSES} from './index.js';
 const request = {model:'saina-helm-0.8b',state:'Text',questions:{tags:{type:'multi_choice',question:'Tags?',options:{a:null,b:null}}}};
-const response = {model:'saina-helm-0.8b',answers:{tags:{type:'multi_choice',memberships:{a:.9,b:.8}}},usage:{input_tokens:1,output_tokens:0}};
+const response = {request_id:'req_9',model:'saina-helm-0.8b',answers:{tags:{type:'multi_choice',memberships:{a:.9,b:.8}}},usage:{input_tokens:1,output_tokens:0}};
 const KEY = '01890a5d-ac96-774b-bcce-b302099a8057';
 const json = (body, status = 200, headers = {}) =>
   new Response(typeof body === 'string' ? body : JSON.stringify(body), {status, headers: {'Content-Type': 'application/json', ...headers}});
@@ -28,13 +28,13 @@ function scripted(outcomes, options = {}) {
 test('ask sends typed questions and accepts independent memberships', async () => {
   const client = new SainaHelm({baseUrl:'https://example.com',apiKey:'test',fetch:async (url, init) => {
     assert.equal(url,'https://example.com/v1/ask');
-    assert.deepEqual(JSON.parse(init.body),request);
+    assert.deepEqual(JSON.parse(init.body),{...request,mode:'distribution'});
     assert.equal(init.redirect,'error');
     assert.equal(init.headers.Authorization,'Bearer test');
-    assert.equal(init.headers['Idempotency-Key'], undefined);
+    assert.match(init.headers['Idempotency-Key'], /^[0-9a-f-]{36}$/);
     return json(response);
   }});
-  assert.deepEqual(await client.ask(request),response);
+  assert.deepEqual((await client.ask(request)).raw,response);
 });
 test('rejects missing answers, wrong tags and invalid probabilities',async () => {
   for (const answers of [{}, {tags:{type:'single_choice',probabilities:{a:.9,b:.1},selection:'a',confidence:.8}}, {tags:{type:'multi_choice',memberships:{a:NaN,b:.8}}}]) {
@@ -42,12 +42,10 @@ test('rejects missing answers, wrong tags and invalid probabilities',async () =>
     await assert.rejects(client.ask(request),/Invalid typed/);
   }
 });
-test('decision mode carries policy and nullable selection',async()=>{
-  const body={model:request.model,state:'Text',mode:'decision',threshold:.95,questions:{team:{type:'single_choice',question:'Team?',options:{a:null,b:null}}}};
-  const result={...response,answers:{team:{type:'single_choice',selection:null,probabilities:{a:.9,b:.1},confidence:.8,reason:'below_threshold'}}};
-  const client=new SainaHelm({baseUrl:'https://example.com',apiKey:'test',fetch:async(_,init)=>{
-    assert.deepEqual(JSON.parse(init.body),body);return json(result);}});
-  assert.deepEqual(await client.ask(body),result);
+test('native decision arguments require local selection', async () => {
+  const {client, calls} = scripted([]);
+  await assert.rejects(client.ask({...request, mode: 'decision', threshold: .9}), TypeError);
+  assert.equal(calls.length, 0);
 });
 test('sanitizes HTTP failure',async()=>{
   const client=new SainaHelm({baseUrl:'https://example.com',apiKey:'test',fetch:async()=>({ok:false,status:503})});
@@ -76,7 +74,7 @@ test('rejects a non-UUIDv7 key', async () => {
 });
 
 test('no key means no retry', async () => {
-  const {client, calls} = scripted([fail(503, 'accounting_unavailable', {admitted: true, state: 'unknown'}), json(response)]);
+  const {client, calls} = scripted([fail(503, 'accounting_unavailable', {admitted: true, state: 'unknown'}), json(response)], {autoIdempotencyKey: false});
   await assert.rejects(client.ask(request), AccountingUnavailable);
   assert.equal(calls.length, 1);
 });
@@ -87,7 +85,7 @@ test('retries reuse the same key and identical body', async () => {
     json(response, 200, {'X-Request-Id': 'req_9', 'X-Saina-Credits-Charged': '3',
       'X-Saina-Balance': '9007199254740993', 'X-Saina-Price-Version': '1', 'X-Saina-Replayed': 'true'})]);
   const {result, metadata} = await client.askWithMetadata(request, {idempotencyKey: KEY});
-  assert.deepEqual(result, response);
+  assert.deepEqual(result.raw, response);
   assert.equal(calls.length, 3);
   assert.deepEqual(new Set(calls.map(c => c.init.headers['Idempotency-Key'])), new Set([KEY]));
   assert.equal(new Set(calls.map(c => c.init.body)).size, 1);
@@ -121,7 +119,7 @@ test('overloaded is retried only when not admitted, honoring Retry-After', async
   const {client, calls, sleeps} = scripted([
     fail(429, 'overloaded', {admitted: false, state: 'not_admitted'}, {'Retry-After': '2'}),
     fail(503, 'inference_unavailable', {admitted: false}), json(response)]);
-  assert.deepEqual(await client.ask(request, {idempotencyKey: KEY}), response);
+  assert.deepEqual((await client.ask(request, {idempotencyKey: KEY})).raw, response);
   assert.equal(calls.length, 3);
   assert.deepEqual(sleeps, [2000, 1000]);
 });
@@ -145,8 +143,8 @@ test('error fields are parsed; legacy bodies still give SainaError', async () =>
       [403, 'account_suspended', 'req_1', false, 'not_admitted', 'no', suspension]);
     return true;
   });
-  s = scripted([json({detail: 'Model is busy'}, 503)]);
-  await assert.rejects(s.client.ask(request), e => e.constructor === SainaError && e.status === 503 && e.code === null && /busy/.test(e.message));
+  s = scripted([json({detail: 'Model is busy'}, 503)], {autoIdempotencyKey: false});
+  await assert.rejects(s.client.ask(request), e => e instanceof SainaError && e.status === 503 && e.code === null && /busy/.test(e.message));
 });
 test('systemOne posts to /v1/systemone', async () => {
   const {client, calls} = scripted([json({model: 'm', answers: {a: {type: 'noul', noul: .5}}})]);
@@ -223,6 +221,6 @@ test('http(s) images are downloaded with the client fetch; requests without medi
   assert.equal(calls[0].url, 'https://example.com/cat.png');
   assert.ok(JSON.parse(calls[1].init.body).images[0].startsWith('data:image/png;base64,'));
   await client.ask(request);
-  assert.deepEqual(JSON.parse(calls[2].init.body), request);
+  assert.deepEqual(JSON.parse(calls[2].init.body), {...request,mode:'distribution'});
   await assert.rejects(client.ask({...request, images: 'data:image/png;base64,AA=='}), /images must be an array/);
 });

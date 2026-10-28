@@ -1,11 +1,11 @@
 export type Content = string | {[key: string]: Json} | Json[];
 export type Json = null | boolean | number | string | Json[] | {[key: string]: Json};
-export type Options = Record<string, Content | null>;
-export type Question =
+export type Options = Record<string, Content | null> | string[];
+export type Question = {extra?: Record<string, Json>} & (
   | {type: 'yes_no'; question: Content; descriptions?: {yes: Content; no: Content}}
   | {type: 'single_choice'; question: Content; options: Options}
   | {type: 'rating'; question: Content; levels: Content[]}
-  | {type: 'multi_choice'; question: Content; options: Options};
+  | {type: 'multi_choice'; question: Content; options: Options});
 export type DecisionQuestion = Question extends infer Q ? Q extends Question ? Q & {threshold?: number} &
   (Q['type'] extends 'yes_no' | 'single_choice' ? {min_margin?: number} : {}) : never : never;
 /**
@@ -21,19 +21,74 @@ export type AudioInput = string | Blob | ArrayBuffer | ArrayBufferView;
  * read at up to 1.6 megapixels; each clip is read as a log-mel spectrogram after the images. Every question sees
  * all of them, and their input tokens count in `usage.input_tokens`.
  */
-export interface MediaFields {images?: ImageInput[]; audios?: AudioInput[]}
+export interface MediaFields {images?: ImageInput[]; audios?: AudioInput[]; extra?: Record<string, Json>}
 /** `saina-helm`: whichever Helm the endpoint serves. `helm-0.8b` is the deprecated 0.1 name of `saina-helm-0.8b`. */
-export type AskRequest = {model: 'saina-helm' | 'saina-helm-2-0.8b' | 'saina-helm-2-omni-0.8b' | 'saina-helm-3-0.8b' | 'saina-helm-0.8b' | 'helm-0.8b' | (string & {}); state: Content} & MediaFields & (
-  | {mode?: 'distribution'; questions: Record<string, Question>}
-  | {mode: 'decision'; threshold?: number; min_margin?: number; questions: Record<string, DecisionQuestion>});
-export type Reason = 'accepted' | 'below_threshold' | 'below_margin' | 'tie';
-export type Answer =
-  | {type: 'yes_no'; yes: number; no: number; confidence: number; selected?: boolean | null; reason?: Reason}
-  | {type: 'single_choice'; selection: string | null; probabilities: Record<string, number>; confidence: number; reason?: Reason}
-  | {type: 'rating'; expected_level: number; levels: Content[]; probabilities: Record<string, number>; confidence: number; level?: number | null; reason?: Reason}
-  | {type: 'multi_choice'; memberships: Record<string, number>; selections?: string[]; reason?: Reason};
-export interface AskResponse {model: string; answers: Record<string, Answer>; usage: {input_tokens: number; output_tokens: number}}
-export type SystemOneQuestion = {type: 'choice' | 'score' | 'noul'; instructions: Content; criteria?: {[key: string]: Json} | Json[] | null};
+export type AskRequest = {model: string; state: Content; questions: Record<string, Question>; specialist?: string} & MediaFields;
+export type SelectionReason = 'accepted' | 'below_threshold' | 'tie' | 'below_margin' | 'no_options_selected';
+export interface SelectOptions {threshold: number; minMargin?: number}
+export interface Serializable {toObject(): Record<string, Json>; toJSON(): Record<string, Json>}
+export class YesNoAnswer implements Serializable {
+  readonly type: 'yes_no'; readonly yes: number; readonly no: number; readonly confidence: number;
+  select(options: SelectOptions): YesNoSelection;
+  toObject(): Record<string, Json>; toJSON(): Record<string, Json>;
+}
+export class SingleChoiceAnswer implements Serializable {
+  readonly type: 'single_choice'; readonly probabilities: Readonly<Record<string, number>>; readonly confidence: number;
+  select(options: SelectOptions): SingleChoiceSelection;
+  toObject(): Record<string, Json>; toJSON(): Record<string, Json>;
+}
+export class RatingAnswer implements Serializable {
+  readonly type: 'rating'; readonly probabilities: Readonly<Record<number, number>>;
+  readonly levels: readonly Content[]; readonly expected_level: number; readonly confidence: number;
+  select(options: SelectOptions): RatingSelection;
+  toObject(): Record<string, Json>; toJSON(): Record<string, Json>;
+}
+export class MultiChoiceAnswer implements Serializable {
+  readonly type: 'multi_choice'; readonly memberships: Readonly<Record<string, number>>;
+  select(options: SelectOptions): MultiChoiceSelection;
+  toObject(): Record<string, Json>; toJSON(): Record<string, Json>;
+}
+export type Answer = YesNoAnswer | SingleChoiceAnswer | RatingAnswer | MultiChoiceAnswer;
+export interface Selection extends Serializable {
+  readonly type: Answer['type']; readonly value: boolean | string | number | readonly string[] | null;
+  readonly accepted: boolean; readonly reason: SelectionReason; readonly answer: Answer;
+  readonly threshold: number; readonly minMargin: number;
+}
+export class YesNoSelection implements Selection {
+  readonly type: 'yes_no'; readonly value: boolean | null; readonly answer: YesNoAnswer;
+  readonly accepted: boolean; readonly reason: SelectionReason; readonly threshold: number; readonly minMargin: number;
+  toObject(): Record<string, Json>; toJSON(): Record<string, Json>;
+}
+export class SingleChoiceSelection implements Selection {
+  readonly type: 'single_choice'; readonly value: string | null; readonly answer: SingleChoiceAnswer;
+  readonly accepted: boolean; readonly reason: SelectionReason; readonly threshold: number; readonly minMargin: number;
+  toObject(): Record<string, Json>; toJSON(): Record<string, Json>;
+}
+export class RatingSelection implements Selection {
+  readonly type: 'rating'; readonly value: number | null; readonly label: Content | null; readonly answer: RatingAnswer;
+  readonly accepted: boolean; readonly reason: SelectionReason; readonly threshold: number; readonly minMargin: number;
+  toObject(): Record<string, Json>; toJSON(): Record<string, Json>;
+}
+export class MultiChoiceSelection implements Selection {
+  readonly type: 'multi_choice'; readonly value: readonly string[]; readonly answer: MultiChoiceAnswer;
+  readonly accepted: boolean; readonly reason: SelectionReason; readonly threshold: number; readonly minMargin: number;
+  toObject(): Record<string, Json>; toJSON(): Record<string, Json>;
+}
+/** Direct properties work for non-colliding IDs; get() supports every question ID. */
+export type Selections = Readonly<Record<string, Selection>> & Serializable & {
+  get(questionId: string): Selection | undefined;
+};
+export const Selections: {new(items: Record<string, Selection>): Selections};
+export class Answers implements Serializable {
+  readonly requestId: string; readonly model: string; readonly specialist: string | null;
+  readonly usage: Readonly<{input_tokens?: number; output_tokens?: number}>;
+  readonly metadata: Readonly<ResponseMetadata>; readonly raw: unknown;
+  readonly answers: Readonly<Record<string, Answer>>;
+  select(options: SelectOptions): Selections;
+  toObject(): Record<string, Json>; toJSON(): Record<string, Json>;
+}
+export type AskResponse = Answers;
+export type SystemOneQuestion = {type: 'choice' | 'score' | 'noul'; instructions: Content; extra?: Record<string, Json>; criteria?: {[key: string]: Json} | Json[] | null};
 export type SystemOneRequest = {model: string; state: Content; questions: Record<string, SystemOneQuestion>} & MediaFields;
 export type SystemOneAnswer =
   | {type: 'noul'; noul: number}
@@ -59,7 +114,8 @@ export type ErrorCode =
   | 'idempotency_conflict' | 'request_in_progress' | 'idempotency_result_expired' | 'idempotency_unverifiable'
   | 'fresh_auth_required' | 'permission_denied' | 'not_found';
 export interface Suspension {types: Array<'financial' | 'security'>; next_step: 'buy_credits' | 'contact_support'}
-export class SainaHelmError extends Error {
+export class SainaError extends Error {
+  constructor(message: string, status?: number, details?: Record<string, unknown>);
   readonly status?: number;
   readonly code: ErrorCode | string | null;
   readonly requestId: string | null;
@@ -69,26 +125,41 @@ export class SainaHelmError extends Error {
   /** Seconds from Retry-After. */
   readonly retryAfter: number | null;
   readonly suspension: Suspension | null;
+  readonly raw: unknown;
+  readonly fields: Record<string, unknown>;
 }
-export class SainaConnectionError extends SainaHelmError {}
-export const ERROR_CLASSES: Readonly<Record<ErrorCode, typeof SainaHelmError>>;
-export class InvalidApiKey extends SainaHelmError {}
-export class KeyRevoked extends SainaHelmError {}
-export class AccountSuspended extends SainaHelmError {}
-export class InsufficientCredits extends SainaHelmError {}
-export class InvalidRequest extends SainaHelmError {}
-export class RateLimited extends SainaHelmError {}
-export class Overloaded extends SainaHelmError {}
-export class InferenceFailed extends SainaHelmError {}
-export class InferenceUnavailable extends SainaHelmError {}
-export class AccountingUnavailable extends SainaHelmError {}
-export class IdempotencyConflict extends SainaHelmError {}
-export class RequestInProgress extends SainaHelmError {}
-export class IdempotencyResultExpired extends SainaHelmError {}
-export class IdempotencyUnverifiable extends SainaHelmError {}
-export class FreshAuthRequired extends SainaHelmError {}
-export class PermissionDenied extends SainaHelmError {}
-export class NotFound extends SainaHelmError {}
+export class HTTPError extends SainaError {}
+export class AuthenticationError extends HTTPError {}
+export class PermissionDeniedError extends HTTPError {}
+export class NotFoundError extends HTTPError {}
+export class InvalidRequestError extends HTTPError {}
+export class RateLimitError extends HTTPError {}
+export class IdempotencyError extends HTTPError {}
+export class ServerError extends HTTPError {}
+export class ModelBusyError extends ServerError {}
+export class TransportError extends SainaError {readonly timedOut: boolean}
+export class ProtocolError extends SainaError {}
+export class SpoolFullError extends SainaError {}
+export class TraceStorageError extends SainaError {}
+export class InvalidApiKey extends AuthenticationError {}
+export class KeyRevoked extends AuthenticationError {}
+export class FreshAuthRequired extends AuthenticationError {}
+export class PermissionDenied extends PermissionDeniedError {}
+export class AccountSuspended extends PermissionDeniedError {}
+export class NotFound extends NotFoundError {}
+export class InvalidRequest extends InvalidRequestError {}
+export class RateLimited extends RateLimitError {}
+export class InsufficientCredits extends HTTPError {}
+export class IdempotencyConflict extends IdempotencyError {}
+export class RequestInProgress extends IdempotencyError {}
+export class IdempotencyResultExpired extends IdempotencyError {}
+export class IdempotencyUnverifiable extends IdempotencyError {}
+export class InferenceFailed extends ServerError {}
+export class AccountingUnavailable extends ServerError {}
+export class Overloaded extends ModelBusyError {}
+export class InferenceUnavailable extends ModelBusyError {}
+export {SainaError as SainaHelmError, TransportError as SainaConnectionError};
+export const ERROR_CLASSES: Readonly<Record<ErrorCode, typeof HTTPError>>;
 
 /** Billing metadata from response headers; credit fields are null when the server omits them. */
 export interface ResponseMetadata {
@@ -112,7 +183,8 @@ export type Filter = string | number | Date | null | undefined;
 export interface ClientOptions {
   /** Defaults to https://api.saina.run. */
   baseUrl?: string;
-  apiKey: string;
+  apiKey?: string;
+  allowHttp?: boolean;
   /** Per-attempt timeout in ms. */
   timeout?: number;
   fetch?: typeof fetch;
@@ -120,56 +192,56 @@ export interface ClientOptions {
   maxRetries?: number;
   /** Upper bound on the total wait across retries, in ms (default 30000). */
   maxRetryDelay?: number;
-  /** Generate one UUIDv7 key per inference call when none is passed, enabling retries. */
+  /** Generate one UUIDv7 key per inference call when none is passed (default true). */
   autoIdempotencyKey?: boolean;
   /** Testing hooks. */
   sleep?: (ms: number) => Promise<void>;
   random?: () => number;
 }
 export class SainaHelm {
-  constructor(options: ClientOptions);
+  constructor(options?: ClientOptions);
   readonly baseUrl: string;
   lastMetadata: ResponseMetadata | null;
   ask(request: AskRequest, options?: CallOptions): Promise<AskResponse>;
   askWithMetadata(request: AskRequest, options?: CallOptions): Promise<{result: AskResponse; metadata: ResponseMetadata}>;
-  systemOne(request: SystemOneRequest, options?: CallOptions): Promise<SystemOneResponse>;
-  systemOneWithMetadata(request: SystemOneRequest, options?: CallOptions): Promise<{result: SystemOneResponse; metadata: ResponseMetadata}>;
   decisions(request: DecisionsRequest, options?: CallOptions): Promise<DecisionsResponse>;
   decisionsWithMetadata(request: DecisionsRequest, options?: CallOptions): Promise<{result: DecisionsResponse; metadata: ResponseMetadata}>;
+  systemOne(request: SystemOneRequest, options?: CallOptions): Promise<SystemOneResponse>;
+  systemOneWithMetadata(request: SystemOneRequest, options?: CallOptions): Promise<{result: SystemOneResponse; metadata: ResponseMetadata}>;
   balance(): Promise<Balance>;
   usage(filters?: {from?: Filter; to?: Filter; channel?: Filter}): Promise<any>;
   requests(filters?: {cursor?: Filter; limit?: Filter; from?: Filter; to?: Filter; key_id?: Filter; channel?: Filter; status?: Filter}): Promise<any>;
 }
-/** POST /v1/decisions in the OpenAI Decisions request shape (see the Saina docs for what is accepted). */
+export { SainaHelm as Saina };
+
 export interface DecisionsRequest {
   model: string;
-  input: string | Array<Record<string, unknown>>;
-  questions: Array<
-    | {type: 'predicate'; name?: string; instructions: string | Array<Record<string, unknown>>; threshold?: number; min_margin?: number}
-    | {type: 'choice'; name?: string; instructions: string | Array<Record<string, unknown>>;
-       choices: Array<{value: string | boolean; description?: string}>; threshold?: number; min_margin?: number}
-    | {type: 'score'; name?: string; instructions: string | Array<Record<string, unknown>>;
-       levels: Array<{label: string; description?: string}>; threshold?: number}>;
-  /** Saina extensions. */
-  mode?: 'distribution' | 'decision';
-  threshold?: number;
-  min_margin?: number;
-  specialist?: string;
+  input: Content;
+  questions: Array<{name?: string; type: 'predicate' | 'choice' | 'score'; extra?: Record<string, Json>; [key: string]: unknown}>;
+  extra?: Record<string, Json>;
+  [key: string]: unknown;
 }
-export type DecisionsAnswer =
-  | {type: 'predicate'; name: string | null; probability: number}
-  | {type: 'choice'; name: string | null; choice: string | boolean; confidence: number;
-     probabilities: Array<{value: string | boolean; probability: number}>}
-  | {type: 'score'; name: string | null; score: number; confidence: number;
-     probabilities: Array<{value: number; label: string; probability: number}>}
-  /** Only with a decision policy: `reason` and the distribution are Saina extensions. */
-  | {type: 'refusal'; name: string | null; reason: 'below_threshold' | 'below_margin' | 'tie'; probability?: number;
-     probabilities?: Array<{value: string | boolean | number; label?: string; probability: number}>};
 export interface DecisionsResponse {
   model: string;
-  specialist?: string;
-  answers: DecisionsAnswer[];
-  usage: {input_tokens: number; input_tokens_details: {cached_tokens: 0; cache_write_tokens: 0};
-          output_tokens: 0; output_tokens_details: {reasoning_tokens: 0}; total_tokens: number};
+  answers: Array<{name: string | null; type: 'predicate' | 'choice' | 'score' | 'refusal'; [key: string]: unknown}>;
 }
-export { SainaHelm as Saina, SainaHelmError as SainaError };
+export function stringifyCredits(value: unknown): string;
+
+export {TraceClient, DecisionTrace, TraceDeliveryError} from './traces.js';
+export interface TraceFlushResult {readonly complete: boolean; readonly pending: number; readonly rejected: number}
+export interface TracesOptions extends Pick<ClientOptions, 'baseUrl' | 'apiKey' | 'timeout' | 'allowHttp' | 'fetch'> {spoolPath?: string; capacity?: number; onStorageError?: 'warn' | 'raise'}
+export class Traces {
+  constructor(options?: TracesOptions);
+  readonly spoolPath: string | undefined;
+  readonly capacity: number;
+  readonly pending: Promise<number>;
+  readonly lastError: Error | null;
+  log(record: {task: string; inputs: Json; outcome?: Json; metadata?: Record<string, Json> | null}): Promise<string | null>;
+  flush(options?: {timeout?: number}): Promise<TraceFlushResult>;
+  close(options?: {timeout?: number}): Promise<void>;
+  exportRejected(path: string): Promise<number>;
+  retryRejected(traceIds: string[]): Promise<number>;
+  discardRejected(traceIds: string[]): Promise<number>;
+}
+
+export type {TraceJson, TraceOptions, DecisionTraceOptions, EndpointDecision} from './traces.js';
