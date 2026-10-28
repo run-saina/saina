@@ -74,7 +74,10 @@ export class MultiChoiceSelection implements Selection {
   readonly accepted: boolean; readonly reason: SelectionReason; readonly threshold: number; readonly minMargin: number;
   toObject(): Record<string, Json>; toJSON(): Record<string, Json>;
 }
-export type Selections = Readonly<Record<string, Selection>> & Serializable;
+/** Direct properties work for non-colliding IDs; get() supports every question ID. */
+export type Selections = Readonly<Record<string, Selection>> & Serializable & {
+  get(questionId: string): Selection | undefined;
+};
 export const Selections: {new(items: Record<string, Selection>): Selections};
 export class Answers implements Serializable {
   readonly requestId: string; readonly model: string; readonly specialist: string | null;

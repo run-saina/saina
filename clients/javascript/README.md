@@ -127,6 +127,14 @@ probability keys are numeric indices; rating selections expose `.label`. Multi-c
 order and returns `no_options_selected` if nothing qualifies. Threshold checks precede ties and margins;
 margin is ignored for rating and multi-choice.
 
+Use `selections.get(questionId)` for arbitrary question IDs, including names such as `toObject`,
+`toJSON`, or `get` that collide with methods. It returns `undefined` for an unknown ID. Direct properties
+such as `selections.issue` remain available when the ID does not collide. `selections.toObject()` and
+`JSON.stringify(selections)` include every question, including colliding names.
+
+Options supplied as lists retain their declared order in the wire request, including numeric-looking
+labels such as `['10', '2']`.
+
 Native `ask()` always requests distributions. Move unknown ordinary fields into `extra`, and replace
 `mode: 'decision'` and server thresholds with local selection. Responses require a body `request_id` or
 `X-Request-Id` header; if both exist, they must agree. Metadata is bound to each result for concurrent code.

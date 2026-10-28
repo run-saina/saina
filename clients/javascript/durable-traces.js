@@ -94,10 +94,15 @@ export class Traces {
   }
   async #ensure(create = false) {
     if (this.#db) return this.#db;
-    if (!this.#initPromise) this.#initPromise = this.#initialize(create);
-    try { return await this.#initPromise; }
+    const initialization = this.#initPromise ??= this.#initialize(create);
+    let db;
+    try { db = await initialization; }
     catch (error) { throw storageError(error); }
-    finally { this.#initPromise = null; }
+    finally { if (this.#initPromise === initialization) this.#initPromise = null; }
+    // A read-only first use may find no file. Admissions sharing that operation
+    // must upgrade to creation, without clearing a newer initialization promise.
+    if (!db && create && this.#state !== 'closed') return this.#ensure(true);
+    return db;
   }
   #transaction(callback) {
     try {

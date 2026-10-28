@@ -1,7 +1,7 @@
 export {Traces} from './durable-traces.js';
 export {TraceClient, DecisionTrace, TraceDeliveryError} from './traces.js';
 import {Answers, validateTyped} from './answers.js';
-import {nativeRequest, normalizeRequest, flattenExtra, requestFields, questionFields, jsonValue} from './validation.js';
+import {nativeRequest, normalizeRequest, flattenExtra, requestFields, questionFields, jsonValue, stringifyRequest} from './validation.js';
 export {Answers, Selections, YesNoAnswer, SingleChoiceAnswer, RatingAnswer, MultiChoiceAnswer, YesNoSelection, SingleChoiceSelection, RatingSelection, MultiChoiceSelection} from './answers.js';
 
 export const DEFAULT_BASE_URL = 'https://api.saina.run';
@@ -315,7 +315,7 @@ export class SainaHelm {
     if (idempotencyKey == null && this.autoIdempotencyKey) idempotencyKey = newIdempotencyKey(); // once per call
     validateIdempotencyKey(idempotencyKey);
     jsonValue(request);
-    const body = JSON.stringify(request); // serialized once: every retry sends identical bytes
+    const body = stringifyRequest(request); // serialized once: every retry sends identical bytes
     const headers = {'Content-Type': 'application/json'};
     if (idempotencyKey != null) headers['Idempotency-Key'] = idempotencyKey;
     const out = await this.#call('POST', path, body, headers, idempotencyKey ?? null, idempotencyKey != null, JSON.parse);

@@ -71,11 +71,17 @@ export class RatingSelection extends Selection {}
 export class MultiChoiceSelection extends Selection {}
 
 export class Selections extends Serializable {
+  #items;
   constructor(items) {
     super();
-    for (const [key, value] of Object.entries(items)) Object.defineProperty(this, key, {value, enumerable: true});
+    this.#items = deepFreeze(Object.fromEntries(Object.entries(items)));
+    for (const [key, value] of Object.entries(this.#items)) {
+      if (!(key in this)) Object.defineProperty(this, key, {value, enumerable: true});
+    }
     deepFreeze(this);
   }
+  get(questionId) { return Object.hasOwn(this.#items, questionId) ? this.#items[questionId] : undefined; }
+  toObject() { return toObject(this.#items); }
 }
 
 export class Answers extends Serializable {

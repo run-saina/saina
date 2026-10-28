@@ -15,6 +15,10 @@ JavaScript uses `result.answers.team`, `result.select({threshold: 0.9})`, `resul
 `JSON.stringify(result)`. Individual answers and selections expose the same serialization conventions.
 Results and their nested collections are immutable.
 
+For arbitrary JavaScript question IDs, use `selections.get(id)`. This supports names such as `toObject`
+and `toJSON` without shadowing serialization methods. Non-colliding IDs retain direct property access.
+Bulk serialization includes all IDs; unknown IDs return `undefined` from `get()`.
+
 Replace `ask(mode='decision', threshold=..., min_margin=...)` with distribution `ask()` followed by
 `answers.select(threshold=..., min_margin=...)` or an individual answer's `select()`. Remove redundant
 `mode='distribution'`. JavaScript uses `minMargin` for local selection. Selection is synchronous and

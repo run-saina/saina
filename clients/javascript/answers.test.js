@@ -143,3 +143,46 @@ test('invalid keys fail before media and numeric option labels retain list order
   const result=await client({...raw,answers:{q:{type:'multi_choice',memberships:{1:.9,2:.8}}}}).sdk.ask(q);
   assert.deepEqual(result.answers.q.select({threshold:.8}).value,['2','1']);
 });
+
+test('numeric option labels keep their declared order in the request body and retries', async () => {
+  for (const type of ['single_choice', 'multi_choice']) {
+    const labels = ['10', '2', 'a', '0'];
+    const vector = Object.fromEntries(labels.map((label, i) => [label, [.7, .2, .08, .02][i]]));
+    const answer = type === 'single_choice'
+      ? {type, probabilities: vector, confidence: .6}
+      : {type, memberships: vector};
+    const calls = [];
+    const sdk = new Saina({apiKey: 'key', sleep: async () => {}, fetch: async (_url, init) => {
+      calls.push(init);
+      if (calls.length === 1)
+        return new Response(JSON.stringify({error: {code: 'rate_limited'}}), {status: 429});
+      return new Response(JSON.stringify({...raw, answers: {q: answer}}));
+    }});
+    await sdk.ask({model: 'm', state: 's', questions: {q: {type, question: 'Q?', options: labels}}});
+    assert.equal(calls.length, 2);
+    assert.ok(calls[0].body.includes('"options":{"10":null,"2":null,"a":null,"0":null}'));
+    assert.equal(calls[0].body, calls[1].body);
+    assert.equal(calls[0].headers['Idempotency-Key'], calls[1].headers['Idempotency-Key']);
+  }
+});
+
+test('selection methods cannot be shadowed by question IDs', async () => {
+  const ids = ['q', 'toObject', 'toJSON', 'get', '__proto__', 'constructor', 'hasOwnProperty', 'toString'];
+  const questions = Object.fromEntries(ids.map(id => [id, {type: 'yes_no', question: 'Q?'}]));
+  const response = {...raw, answers: Object.fromEntries(ids.map(id => [id, raw.answers.q]))};
+  const result = await client(response).sdk.ask({model: 'm', state: 's', questions});
+  const selections = result.select({threshold: .8});
+  assert.equal(selections.q.value, true);
+  for (const id of ids) {
+    assert.equal(selections.get(id).value, true);
+    assert.ok(Object.isFrozen(selections.get(id)));
+  }
+  assert.equal(selections.get('missing'), undefined);
+  const expected = Object.fromEntries(ids.map(id => [id, result.answers[id].select({threshold: .8}).toObject()]));
+  assert.deepEqual(selections.toObject(), expected);
+  assert.deepEqual(selections.toJSON(), expected);
+  assert.deepEqual(JSON.parse(JSON.stringify(selections)), expected);
+  const snapshot = selections.toObject();
+  snapshot.toObject.value = false;
+  assert.equal(selections.get('toObject').value, true);
+});

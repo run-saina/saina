@@ -32,6 +32,14 @@ const label = (v, name) => {
   if (!v.trim()) throw new TypeError(`${name} must not be blank`);
 };
 export const optionLabels = new WeakMap();
+export function stringifyRequest(request) {
+  return JSON.stringify(request, function (key, value) {
+    const order = key === 'options' && optionLabels.get(this);
+    // Ordinary objects enumerate integer-like keys numerically. A proxy retains
+    // the caller's list order in JSON without changing the native wire schema.
+    return order ? new Proxy(value, {ownKeys: () => order}) : value;
+  });
+}
 const content = (value, name) => {
   if (typeof value !== 'string' && (!value || typeof value !== 'object')) throw new TypeError(`${name} must be text or structured content`);
   jsonValue(value);

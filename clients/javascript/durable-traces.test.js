@@ -30,6 +30,28 @@ durableTest('lazy durable snapshots preserve omission and null and enforce close
  }finally{await t.close({timeout:0});rmSync(dir,{recursive:true,force:true});}
 });
 
+durableTest('concurrent first reads and logging create one spool without losing admissions', async () => {
+ for (const onStorageError of ['warn', 'raise']) {
+  for (const read of [t => t.pending, t => t.flush({timeout: 0})]) {
+   const dir = temporary(), path = dir + '/spool.db';
+   const t = new Traces({...options(path), onStorageError});
+   try {
+    const reading = read(t);
+    const logging = Array.from({length: 8}, (_, n) => t.log({task: 'first use', inputs: {n}}));
+    const [snapshot, ...ids] = await Promise.all([reading, ...logging]);
+    assert.ok(snapshot === 0 || snapshot.complete);
+    assert.ok(ids.every(id => typeof id === 'string'));
+    assert.equal(new Set(ids).size, 8);
+    assert.deepEqual(rows(path).map(row => row.trace_id).sort(), ids.toSorted());
+    assert.equal(await t.pending, 8);
+   } finally {
+    await t.close({timeout: 0});
+    rmSync(dir, {recursive: true, force: true});
+   }
+  }
+ }
+});
+
 durableTest('reopening drains existing durable records and invalid acknowledgments never remove them',async()=>{
  const dir=temporary(),path=dir+'/spool.db';let t=new Traces(options(path));
  try{

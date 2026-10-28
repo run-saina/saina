@@ -2,6 +2,10 @@
 
 ## Unreleased — 1.0 client contract changes
 
+- Fix concurrent first reads and durable logging losing admissions before the spool exists. Preserve
+  numeric option-list order in JavaScript wire requests and retries. Add `Selections.get(id)` so
+  arbitrary question IDs cannot shadow serialization methods. Include the new Python answer, contract,
+  and durable-trace regression suites in contract CI.
 - **Durable external logging:** add Python and Node.js `Traces.log()` with a shared SQLite spool,
   commit-before-ID semantics, hashed namespace binding, atomic capacity accounting and recovery after
   process failure. Add exact acknowledgment handling, quarantine/export/retry/discard, warning episodes,

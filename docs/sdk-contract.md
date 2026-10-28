@@ -1100,6 +1100,12 @@ their arguments in examples are supplied by the caller.
 Python accesses `answers["team"]`; JavaScript accesses `result.answers.team`.
 JavaScript nesting avoids collisions between IDs and result methods/metadata.
 
+For bulk selections, `selections.get(questionId)` accesses any question ID and
+returns `undefined` for an unknown ID. Direct properties such as `selections.team`
+remain available for IDs that do not collide with methods or inherited names.
+IDs such as `toObject`, `toJSON`, or `get` are not rejected or overwritten: use
+`get()` to access their selections. Serialization includes every question ID.
+
 Preserve `askWithMetadata`, `systemOne`, `systemOneWithMetadata`, `decisions`,
 `decisionsWithMetadata`, `balance`, `usage`, and `requests`. Use existing
 camelCase configuration names. `autoIdempotencyKey` defaults to true; preserve
