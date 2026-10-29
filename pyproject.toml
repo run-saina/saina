@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "saina"
 version = "1.0.0rc2"
-description = "Saina HTTP SDK and optional Helm model inference"
+description = "Python SDK for Saina, the decision layer for software systems: HTTP client, decision traces and optional Helm local inference"
 authors = [{ name = "Saina", email = "dev@saina.run" }]
 maintainers = [{ name = "Saina", email = "dev@saina.run" }]
 readme = "README.md"
