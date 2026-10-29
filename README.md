@@ -1,15 +1,22 @@
 # Saina
 
-Saina's HTTP SDK, shared decision contract, and optional Helm local inference.
+Saina is the decision layer for software systems. Saina builds specialist AI decision models and the developer platform around them. Developers use Saina to turn model predictions into versioned decision endpoints, observe how those decisions perform in production, turn failures into test cases, and improve their models or policies without breaking existing behavior. Saina works with open models and external inference providers, so teams can use their own infrastructure.
+
+This repository holds Saina's HTTP SDK, the shared decision contract, decision trace
+collection, and optional Helm local inference.
 Saina is operated by **Rama Labs Inc.** Website: https://saina.run.
 
 The Helm weights are released under Apache-2.0, including for commercial use.
 Their training data was limited to permissively licensed sources.
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/run-saina/saina/blob/main/examples/saina_colab.ipynb)
-Models: [Helm 2 0.8B](https://huggingface.co/run-saina/saina-helm-2-0.8b) (current),
-[Helm 3 0.8B](https://huggingface.co/run-saina/saina-helm-3-0.8b) (a native multimodal decision model)
-and the original [Helm 0.8B](https://huggingface.co/run-saina/saina-helm-0.8b). Try Helm in
+Models: Helm is Saina's family of specialist decision models:
+[Helm 3](https://huggingface.co/run-saina/saina-helm-3-0.8b) (`saina-helm-3-0.8b`, a native multimodal decision model),
+[Helm 2](https://huggingface.co/run-saina/saina-helm-2-0.8b) (`saina-helm-2-0.8b`, text decisions),
+[Helm 2 Omni](https://huggingface.co/run-saina/saina-helm-2-omni-0.8b) (`saina-helm-2-omni-0.8b`, text, image and audio decisions)
+and specialist variants such as [Helm 2 Routing](https://huggingface.co/run-saina/saina-helm-2-routing-0.8b)
+(`saina-helm-2-routing-0.8b`) and the mechanical fault specialist. The original
+[Helm 0.8B](https://huggingface.co/run-saina/saina-helm-0.8b) remains published. Try Helm in
 [`examples/saina_colab.ipynb`](examples/saina_colab.ipynb), run the weights locally through the SDK,
 or call [Replicate](https://replicate.com/run-saina/saina-helm-2-0.8b) or your own endpoint.
 

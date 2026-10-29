@@ -1,6 +1,9 @@
 # @run-saina/sdk
 
-Pre-release Saina HTTP client.
+JavaScript client for Saina, the decision layer for software systems. Saina builds specialist AI decision models and the developer platform around them. Developers use Saina to turn model predictions into versioned decision endpoints, observe how those decisions perform in production, turn failures into test cases, and improve their models or policies without breaking existing behavior. Saina works with open models and external inference providers, so teams can use their own infrastructure.
+
+This package calls Helm decision models over HTTP (hosted at `api.saina.run` or self-hosted)
+and sends decision traces to Saina Studio. It is a pre-release.
 
 ```sh
 npm install @run-saina/sdk@next
