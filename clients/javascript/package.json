@@ -1,7 +1,7 @@
 {
   "name": "@run-saina/sdk",
   "version": "1.0.0-rc.2",
-  "description": "Typed client for the Saina Helm probability API",
+  "description": "JavaScript client for Saina, the decision layer for software systems: Helm decision models and Saina Studio decision traces",
   "type": "module",
   "main": "./index.js",
   "types": "./index.d.ts",
