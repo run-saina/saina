@@ -36,6 +36,26 @@ test('ask sends typed questions and accepts independent memberships', async () =
   }});
   assert.deepEqual((await client.ask(request)).raw,response);
 });
+test('task names the call in every route and is checked before sending', async () => {
+  const sent = [];
+  const client = new SainaHelm({baseUrl:'https://example.com',apiKey:'test',fetch:async (url, init) => {
+    const body = JSON.parse(init.body);
+    sent.push([url.split('/').pop(), body.task]);
+    if (body.input) return json({model:'saina-helm-0.8b',answers:[{name:'q',type:'predicate',probability:.7}]});
+    if (!body.mode) return json({model:'saina-helm-0.8b',answers:{q:{type:'noul',noul:.7}}});
+    return json({...response,decision_id:'req_9',collection_id:'saina-decisions'});
+  }});
+  assert.equal((await client.ask({...request,task:'route-ticket'})).raw.decision_id,'req_9');
+  await client.systemOne({model:'saina-helm-0.8b',state:'Text',questions:{q:{type:'noul',instructions:'Yes?'}},task:'route-ticket'});
+  await client.decisions({model:'saina-helm-0.8b',input:'Text',questions:[{name:'q',type:'predicate',instructions:'Yes?'}],task:'route-ticket'});
+  assert.deepEqual(sent,[['ask','route-ticket'],['systemone','route-ticket'],['decisions','route-ticket']]);
+  for (const task of ['Route Ticket','ab',7]) {
+    await assert.rejects(client.ask({...request,task}),TypeError);
+    await assert.rejects(client.systemOne({model:'saina-helm-0.8b',state:'Text',questions:{q:{type:'noul',instructions:'Yes?'}},task}),TypeError);
+  }
+  assert.equal(sent.length,3);
+});
+
 test('rejects missing answers, wrong tags and invalid probabilities',async () => {
   for (const answers of [{}, {tags:{type:'single_choice',probabilities:{a:.9,b:.1},selection:'a',confidence:.8}}, {tags:{type:'multi_choice',memberships:{a:NaN,b:.8}}}]) {
     const client=new SainaHelm({baseUrl:'https://example.com',apiKey:'test',fetch:async()=>json({...response,answers})});

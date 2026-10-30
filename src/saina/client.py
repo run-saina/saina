@@ -27,7 +27,7 @@ from .errors import (
 )
 
 from .answers import Answers, validate_answers
-from .validation import native_request, flatten_extra as _flatten_extra, json_value, json_copy, QUESTION_FIELDS as _QUESTION_FIELDS, REQUEST_FIELDS as _REQUEST_FIELDS
+from .validation import native_request, flatten_extra as _flatten_extra, json_value, json_copy, task_name, QUESTION_FIELDS as _QUESTION_FIELDS, REQUEST_FIELDS as _REQUEST_FIELDS
 
 __version__ = '0.2.0'
 
@@ -228,16 +228,18 @@ class SainaHelm:
         self._metadata_local.value = value
 
     def ask(self, *, model, state, questions, images=None, audios=None, specialist=None,
-            idempotency_key=None, extra=None):
-        """Ask for distributions; apply acceptance requirements locally with select()."""
+            idempotency_key=None, extra=None, task=None):
+        """Ask for distributions; apply acceptance requirements locally with select(). ``task`` names the call:
+        Saina Studio keeps it under an automatic endpoint of that name, and the response carries its
+        ``decision_id`` for reporting business outcomes."""
         return self.ask_with_metadata(model=model, state=state, questions=questions, images=images,
                                       audios=audios, specialist=specialist,
-                                      idempotency_key=idempotency_key, extra=extra)[0]
+                                      idempotency_key=idempotency_key, extra=extra, task=task)[0]
 
     def ask_with_metadata(self, *, model, state, questions, images=None, audios=None, specialist=None,
-                          idempotency_key=None, extra=None):
+                          idempotency_key=None, extra=None, task=None):
         _validate_idempotency_key(idempotency_key)
-        payload = native_request(model, state, questions, specialist, extra)
+        payload = native_request(model, state, questions, specialist, extra, task)
         payload.update(_media(images, audios))
         result, meta = self._post('/v1/ask', payload, idempotency_key)
         validate_answers(payload, result)
@@ -253,13 +255,16 @@ class SainaHelm:
         self.last_metadata = meta
         return Answers(result, meta, payload['questions']), meta
 
-    def system_one(self, *, model, state, questions, images=None, audios=None, idempotency_key=None, extra=None, specialist=None):
-        """Call ``POST /v1/systemone`` (System One wire format: ``noul``, ``choice``, ``score``); ``images`` and
-        ``audios`` as in :meth:`ask`."""
+    def system_one(self, *, model, state, questions, images=None, audios=None, idempotency_key=None, extra=None, specialist=None,
+                   task=None):
+        """Call ``POST /v1/systemone`` (System One wire format: ``noul``, ``choice``, ``score``); ``images``,
+        ``audios`` and ``task`` as in :meth:`ask`."""
         return self.system_one_with_metadata(model=model, state=state, questions=questions, images=images,
-                                             audios=audios, idempotency_key=idempotency_key, extra=extra, specialist=specialist)[0]
+                                             audios=audios, idempotency_key=idempotency_key, extra=extra, specialist=specialist,
+                                             task=task)[0]
 
-    def system_one_with_metadata(self, *, model, state, questions, images=None, audios=None, idempotency_key=None, extra=None, specialist=None):
+    def system_one_with_metadata(self, *, model, state, questions, images=None, audios=None, idempotency_key=None, extra=None, specialist=None,
+                                 task=None):
         _validate_idempotency_key(idempotency_key)
         if not isinstance(questions, dict) or not questions:
             raise ValueError('At least one question is required')
@@ -267,6 +272,8 @@ class SainaHelm:
                                       extra=extra), _REQUEST_FIELDS)
         if specialist is not None:
             payload['specialist'] = specialist
+        if task_name(task) is not None:
+            payload['task'] = task
         json_value(payload)
         payload.update(_media(images, audios))
         result, meta = self._post('/v1/systemone', payload, idempotency_key)
@@ -280,7 +287,8 @@ class SainaHelm:
         items) and a ``questions`` array of ``predicate``, ``choice`` and ``score`` questions. Answers come back in
         question order, in the same shape the official OpenAI SDK reads. Saina extensions are passed as keywords:
         ``mode='decision'`` with ``threshold``/``min_margin`` turns answers the policy does not accept into
-        ``refusal`` entries (still billed), and ``specialist`` selects a domain specialist."""
+        ``refusal`` entries (still billed), ``specialist`` selects a domain specialist, and ``task`` names the call
+        as in :meth:`ask`."""
         return self.decisions_with_metadata(model=model, input=input, questions=questions,
                                             idempotency_key=idempotency_key, **extensions)[0]
 
@@ -289,6 +297,7 @@ class SainaHelm:
         _validate_idempotency_key(idempotency_key)
         if not isinstance(questions, (list, tuple)) or not questions:
             raise ValueError('At least one question is required')
+        task_name(extensions.get('task'))
         payload = dict(model=model, input=input, questions=[_flatten_extra(q, _QUESTION_FIELDS) for q in questions], **extensions)
         payload = _flatten_extra(payload, _REQUEST_FIELDS)
         result, meta = self._post('/v1/decisions', payload, idempotency_key)

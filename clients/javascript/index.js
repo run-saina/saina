@@ -1,7 +1,7 @@
 export {Traces} from './durable-traces.js';
 export {TraceClient, DecisionTrace, TraceDeliveryError} from './traces.js';
 import {Answers, validateTyped} from './answers.js';
-import {nativeRequest, normalizeRequest, flattenExtra, requestFields, questionFields, jsonValue, stringifyRequest} from './validation.js';
+import {nativeRequest, normalizeRequest, flattenExtra, requestFields, questionFields, jsonValue, stringifyRequest, taskName} from './validation.js';
 export {Answers, Selections, YesNoAnswer, SingleChoiceAnswer, RatingAnswer, MultiChoiceAnswer, YesNoSelection, SingleChoiceSelection, RatingSelection, MultiChoiceSelection} from './answers.js';
 
 export const DEFAULT_BASE_URL = 'https://api.saina.run';
@@ -276,6 +276,7 @@ export class SainaHelm {
     validateIdempotencyKey(idempotencyKey);
     if (!Array.isArray(request?.questions) || !request.questions.length)
       throw new TypeError('At least one question is required');
+    taskName(request.task);
     request = flattenExtra(request, requestFields);
     request.questions = request.questions.map(q => flattenExtra(q, questionFields));
     const {result, metadata} = await this.#post('/v1/decisions', request, idempotencyKey);
