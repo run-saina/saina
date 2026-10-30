@@ -6,6 +6,11 @@
 
 ## Unreleased — 1.0 client contract changes
 
+- Optional `task` on `ask`, `system_one` and `decisions` (Python) and on `ask`, `systemOne` and `decisions`
+  requests (JavaScript). The hosted API keeps a call that names a task in Saina Studio, under an automatic
+  endpoint of that name, and adds `decision_id` and `collection_id` to the response. Task names are 3–64
+  lowercase letters, numbers or hyphens and are checked before sending. A local `saina serve` server does
+  not accept `task`.
 - Retry a transient SQLite lock while admitting a durable trace. One peer commit can outlast the 250 ms
   lock attempt; that no longer drops the record in warn mode.
 - Optional `endpoint` on Python and Node.js `Traces.log()` for trace schema 1.0. The field is omitted when

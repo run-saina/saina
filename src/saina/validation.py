@@ -1,12 +1,22 @@
 """Standard-library request validation, before media downloads or inference."""
 from collections.abc import Mapping
 import math
+import re
 
 QUESTION_FIELDS = frozenset({'type', 'question', 'options', 'levels', 'descriptions', 'threshold',
                               'min_margin', 'extra', 'instructions', 'criteria', 'name', 'choices'})
 REQUEST_FIELDS = frozenset({'model', 'state', 'questions', 'mode', 'threshold', 'min_margin',
                              'images', 'audios', 'videos', 'specialist', 'extra', 'idempotency_key',
-                             'input', 'idempotencyKey'})
+                             'input', 'idempotencyKey', 'task'})
+# A task names the call in Saina Studio, which keeps it under an automatic endpoint of the same name.
+TASK = re.compile(r'[a-z0-9][a-z0-9-]{1,62}[a-z0-9]')
+
+
+def task_name(value):
+    if value is not None and not (isinstance(value, str) and TASK.fullmatch(value)):
+        raise ValueError('task must be 3-64 lowercase letters, numbers or hyphens, starting and ending with a '
+                         'letter or number')
+    return value
 
 
 def json_value(value, active=None):
@@ -120,7 +130,7 @@ def native_questions(questions):
     return result
 
 
-def native_request(model, state, questions, specialist, extra):
+def native_request(model, state, questions, specialist, extra, task=None):
     label(model, 'model')
     content(state, 'state')
     if len(model) > 64:
@@ -130,6 +140,8 @@ def native_request(model, state, questions, specialist, extra):
     result = dict(model=model, state=state, questions=native_questions(questions), mode='distribution', extra=extra)
     if specialist is not None:
         result['specialist'] = specialist
+    if task_name(task) is not None:
+        result['task'] = task
     result = flatten_extra(result, REQUEST_FIELDS)
     json_value(result)
     return json_copy(result)

@@ -23,7 +23,8 @@ export type AudioInput = string | Blob | ArrayBuffer | ArrayBufferView;
  */
 export interface MediaFields {images?: ImageInput[]; audios?: AudioInput[]; extra?: Record<string, Json>}
 /** `saina-helm`: whichever Helm the endpoint serves. `helm-0.8b` is the deprecated 0.1 name of `saina-helm-0.8b`. */
-export type AskRequest = {model: string; state: Content; questions: Record<string, Question>; specialist?: string} & MediaFields;
+/** `task` names the call: Saina Studio keeps it under an automatic endpoint of that name, and the response carries `decision_id`. */
+export type AskRequest = {model: string; state: Content; questions: Record<string, Question>; specialist?: string; task?: string} & MediaFields;
 export type SelectionReason = 'accepted' | 'below_threshold' | 'tie' | 'below_margin' | 'no_options_selected';
 export interface SelectOptions {threshold: number; minMargin?: number}
 export interface Serializable {toObject(): Record<string, Json>; toJSON(): Record<string, Json>}
@@ -89,7 +90,7 @@ export class Answers implements Serializable {
 }
 export type AskResponse = Answers;
 export type SystemOneQuestion = {type: 'choice' | 'score' | 'noul'; instructions: Content; extra?: Record<string, Json>; criteria?: {[key: string]: Json} | Json[] | null};
-export type SystemOneRequest = {model: string; state: Content; questions: Record<string, SystemOneQuestion>} & MediaFields;
+export type SystemOneRequest = {model: string; state: Content; questions: Record<string, SystemOneQuestion>; task?: string} & MediaFields;
 export type SystemOneAnswer =
   | {type: 'noul'; noul: number}
   | {type: 'choice'; choice: string; probabilities: Record<string, number>; confidence: number}
@@ -218,6 +219,7 @@ export interface DecisionsRequest {
   model: string;
   input: Content;
   questions: Array<{name?: string; type: 'predicate' | 'choice' | 'score'; extra?: Record<string, Json>; [key: string]: unknown}>;
+  task?: string;
   extra?: Record<string, Json>;
   [key: string]: unknown;
 }
