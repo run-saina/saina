@@ -79,6 +79,31 @@ class ClientTests(unittest.TestCase):
             result['answers']=answers
             with self.assertRaises(SainaHelmError): c.ask(**request)
 
+    def test_task_names_the_call_in_every_route(self):
+        c=SainaHelm('https://example.com',api_key='test')
+        c._opener=Mock()
+        sent=[]
+        stored={**RESULT,'decision_id':'req_9','collection_id':'saina-decisions'}
+        def reply(req, **kwargs):
+            sent.append((req.full_url.rsplit('/',1)[1],json.loads(req.data)))
+            body=json.loads(req.data)
+            if body.get('input'):
+                return io.BytesIO(json.dumps({'model':'saina-helm-0.8b','answers':[{'name':'q','type':'predicate','probability':.7}]}).encode())
+            if 'mode' not in body:
+                return io.BytesIO(json.dumps({'model':'saina-helm-0.8b','answers':{'q':{'type':'noul','noul':.7}}}).encode())
+            return io.BytesIO(json.dumps(stored).encode())
+        c._opener.open.side_effect=reply
+        self.assertEqual(c.ask(**ASK,task='route-ticket').raw['decision_id'],'req_9')
+        c.system_one(model='saina-helm-0.8b',state='text',questions={'q':{'type':'noul','instructions':'Yes?'}},task='route-ticket')
+        c.decisions(model='saina-helm-0.8b',input='text',questions=[{'name':'q','type':'predicate','instructions':'Yes?'}],task='route-ticket')
+        self.assertEqual([(route,body['task']) for route,body in sent],[('ask','route-ticket'),('systemone','route-ticket'),('decisions','route-ticket')])
+        for bad in ('Route Ticket','ab',7):
+            with self.assertRaises(ValueError):
+                c.ask(**ASK,task=bad)
+            with self.assertRaises(ValueError):
+                c.decisions(model='saina-helm-0.8b',input='text',questions=[{'name':'q','type':'predicate','instructions':'Yes?'}],task=bad)
+        self.assertEqual(len(sent),3,'an invalid task is refused before sending')
+
     def test_decision_arguments_require_local_selection(self):
         c = client()
         with self.assertRaises(TypeError):

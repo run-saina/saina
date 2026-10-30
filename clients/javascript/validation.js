@@ -16,7 +16,13 @@ export function jsonValue(value, active = new Set()) {
   } finally { active.delete(value); }
 }
 export const questionFields = new Set(['type', 'question', 'options', 'levels', 'instructions', 'criteria', 'descriptions', 'name', 'choices', 'threshold', 'min_margin', 'extra']);
-export const requestFields = new Set(['model', 'state', 'input', 'questions', 'mode', 'images', 'audios', 'videos', 'specialist', 'threshold', 'min_margin', 'extra', 'idempotency_key', 'idempotencyKey']);
+export const requestFields = new Set(['model', 'state', 'input', 'questions', 'mode', 'images', 'audios', 'videos', 'specialist', 'threshold', 'min_margin', 'extra', 'idempotency_key', 'idempotencyKey', 'task']);
+// A task names the call in Saina Studio, which keeps it under an automatic endpoint of the same name.
+export function taskName(value) {
+  if (value != null && !(typeof value === 'string' && /^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/.test(value)))
+    throw new TypeError('task must be 3-64 lowercase letters, numbers or hyphens, starting and ending with a letter or number');
+  return value;
+}
 export function flattenExtra(value, known) {
   const {extra, ...result} = value;
   if (extra == null) return result;
@@ -46,13 +52,14 @@ const content = (value, name) => {
 };
 export function nativeRequest(request) {
   if (!request || typeof request !== 'object' || Array.isArray(request)) throw new TypeError('request must be an object');
-  const allowed = new Set(['model', 'state', 'questions', 'images', 'audios', 'specialist', 'extra']);
+  const allowed = new Set(['model', 'state', 'questions', 'images', 'audios', 'specialist', 'extra', 'task']);
   if (Object.keys(request).some(k => !allowed.has(k))) throw new TypeError('Unknown request fields; use extra and local select()');
   label(request.model, 'model');
   if (request.model.length > 64) throw new TypeError('model exceeds 64 characters');
   if (!Object.hasOwn(request, 'state')) throw new TypeError('state is required');
   content(request.state, 'state');
   if (request.specialist != null) label(request.specialist, 'specialist');
+  taskName(request.task);
   const questions = request.questions;
   if (!questions || typeof questions !== 'object' || Array.isArray(questions)) throw new TypeError('questions must be an object');
   const entries = Object.entries(questions);
@@ -98,6 +105,7 @@ export function nativeRequest(request) {
   return result;
 }
 export function normalizeRequest(request) {
+  taskName(request.task);
   const result = flattenExtra(request, requestFields);
   result.questions = Object.fromEntries(Object.entries(result.questions).map(([key, value]) => [key, flattenExtra(value, questionFields)]));
   return result;
