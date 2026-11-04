@@ -37,7 +37,7 @@ machine. The home node runs on Node.js 24 or newer; speech and models are hosted
 Install either package; both provide the same `saina agent` command:
 
 ```sh
-pip install saina        # or: npm install -g saina
+pip install saina        # or: npm install -g @run-saina/saina
 saina agent login --home
 saina agent run
 ```

@@ -119,7 +119,7 @@ def test_agent_passes_every_argument_through(args, monkeypatch, capsys):
 
 def test_agent_npm_spec_tracks_the_npm_major_minor():
     from saina.cli import AGENT_NPM_SPEC
-    assert AGENT_NPM_SPEC == 'saina@^0.2'
+    assert AGENT_NPM_SPEC == '@run-saina/saina@^0.2'
 
 
 def test_agent_env_overrides_npm_spec(monkeypatch, capsys):
@@ -152,7 +152,7 @@ def test_agent_on_windows_returns_child_exit_code(monkeypatch, capsys):
     monkeypatch.setattr(saina.cli.os, 'name', 'nt')
     monkeypatch.setattr(saina.cli.subprocess, 'call', lambda argv: calls.append(argv) or 3)
     assert main(['agent', 'devices', '--json']) == 3
-    assert calls == [['/usr/bin/npx', '--yes', '--package', 'saina@^0.2', '--', 'saina', 'agent', 'devices', '--json']] and stub.calls == []
+    assert calls == [['/usr/bin/npx', '--yes', '--package', '@run-saina/saina@^0.2', '--', 'saina', 'agent', 'devices', '--json']] and stub.calls == []
     assert capsys.readouterr().out == ''
 
 

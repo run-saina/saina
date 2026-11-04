@@ -11,9 +11,9 @@ from . import __version__
 
 from .artifacts import verify_artifacts, verify_files
 
-# npm package that implements `saina agent`. Tracks the npm `saina` package's major/minor;
+# npm package that implements `saina agent` (@run-saina/saina; npm refuses the unscoped name). Tracks its major/minor;
 # SAINA_AGENT_NPM_SPEC overrides it (for example with a local tarball path).
-AGENT_NPM_SPEC = 'saina@^0.2'
+AGENT_NPM_SPEC = '@run-saina/saina@^0.2'
 AGENT_NODE_MAJOR = 24
 NODE_INSTALL_HINT = f'Install Node.js {AGENT_NODE_MAJOR} or newer from https://nodejs.org, then run the command again.'
 
