@@ -6,6 +6,10 @@
 
 ## Unreleased — 1.0 client contract changes
 
+- `saina agent ...` runs the Saina Agent home node. The Python CLI hands every argument unchanged to
+  the npm package `@run-saina/saina` (`npx --yes --package @run-saina/saina@^0.2 -- saina agent ...`), so both ecosystems share one
+  command shape and one implementation. Needs Node.js 24 or newer; `SAINA_AGENT_NPM_SPEC` overrides the
+  npm spec. The Python side prints nothing to stdout, so `--json` output stays the node's NDJSON.
 - Optional `task` on `ask`, `system_one` and `decisions` (Python) and on `ask`, `systemOne` and `decisions`
   requests (JavaScript). The hosted API keeps a call that names a task in Saina Studio, under an automatic
   endpoint of that name, and adds `decision_id` and `collection_id` to the response. Task names are 3–64

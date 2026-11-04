@@ -1,18 +1,32 @@
 """Local diagnostics; intentionally usable without inference dependencies."""
 import argparse
 import json
+import os
 import re
+import shutil
+import subprocess
 import sys
 
 from . import __version__
 
 from .artifacts import verify_artifacts, verify_files
 
+# npm package that implements `saina agent` (@run-saina/saina; npm refuses the unscoped name). Tracks its major/minor;
+# SAINA_AGENT_NPM_SPEC overrides it (for example with a local tarball path).
+AGENT_NPM_SPEC = '@run-saina/saina@^0.2'
+AGENT_NODE_MAJOR = 24
+NODE_INSTALL_HINT = f'Install Node.js {AGENT_NODE_MAJOR} or newer from https://nodejs.org, then run the command again.'
+
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ['agent']:
+        return run_agent(argv[1:])
     parser = argparse.ArgumentParser(prog='saina', description='Run Saina on this device and verify model artifacts.')
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     commands = parser.add_subparsers(dest='command', required=True)
+    # Handled before parsing (see run_agent); listed here for help output only.
+    commands.add_parser('agent', help=f'Run the Saina Agent home node (needs Node.js {AGENT_NODE_MAJOR}+)', add_help=False)
     doctor = commands.add_parser('doctor', help='Check local artifact integrity without loading a model')
     doctor.add_argument('model_key', nargs='?', help='Model key to verify; otherwise select a cached model')
     doctor.add_argument('--checkpoint', help='Local bundle directory; omit to verify the pinned default cache')
@@ -118,3 +132,49 @@ def doctor_bundle(args, backend):
     manifest = args.manifest or ('gguf-manifest.json' if backend == 'gguf' else 'artifact-manifest.json')
     required = ['head-config.json', 'config.json'] if backend == 'mlx' else ['head-config.json', 'head.safetensors']
     return verify_artifacts(args.checkpoint, manifest=manifest, required=[*required, *args.require])
+
+
+def node_major(node):
+    """Major version of the Node.js executable, or None when it cannot be read."""
+    try:
+        out = subprocess.run([node, '--version'], capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = re.fullmatch(r'v?(\d+)\.\d+\.\d+\S*', out.strip())
+    return int(match.group(1)) if match else None
+
+
+def run_agent(args):
+    """Hand `saina agent ...` to the npm package, passing every argument through unchanged.
+
+    The Python side writes nothing to stdout: in --json mode stdout carries only the node's NDJSON.
+    """
+    node = shutil.which('node')
+    if not node:
+        print(f'saina agent needs Node.js {AGENT_NODE_MAJOR} or newer, and node was not found on PATH. {NODE_INSTALL_HINT}',
+              file=sys.stderr)
+        return 1
+    major = node_major(node)
+    if major is None or major < AGENT_NODE_MAJOR:
+        found = f'Node.js {major}' if major is not None else f'an unreadable Node.js version at {node}'
+        print(f'saina agent needs Node.js {AGENT_NODE_MAJOR} or newer; found {found}. {NODE_INSTALL_HINT}', file=sys.stderr)
+        return 1
+    npx = shutil.which('npx')
+    if not npx:
+        print(f'saina agent needs npx, which ships with Node.js, and it was not found on PATH. {NODE_INSTALL_HINT}',
+              file=sys.stderr)
+        return 1
+    spec = os.environ.get('SAINA_AGENT_NPM_SPEC') or AGENT_NPM_SPEC
+    # --package keeps a path spec (local tarball) from being run as a file and names the bin explicitly.
+    command = [npx, '--yes', '--package', spec, '--', 'saina', 'agent', *args]
+    sys.stdout.flush()
+    sys.stderr.flush()
+    try:
+        if os.name == 'nt':
+            return subprocess.call(command)
+        os.execvp(npx, command)
+    except KeyboardInterrupt:
+        return 130
+    except OSError as exc:
+        print(f'Could not start {npx}: {exc}', file=sys.stderr)
+        return 1

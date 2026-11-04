@@ -85,3 +85,88 @@ def test_playground_has_no_model_argument(monkeypatch):
     assert main(['playground','--no-browser'])==0
     assert calls[0].model_key is None and not calls[0].api_only
     with pytest.raises(SystemExit): main(['playground','helm'])
+
+
+class AgentHandoff:
+    """Stubs PATH lookup, `node --version` and the exec so no Node.js process runs."""
+    def __init__(self, monkeypatch, node='v24.1.0', which=None):
+        import saina.cli
+        import subprocess
+        self.calls = []
+        paths = which if which is not None else {'node': '/usr/bin/node', 'npx': '/usr/bin/npx'}
+        monkeypatch.setattr(saina.cli.shutil, 'which', lambda name: paths.get(name))
+        monkeypatch.setattr(saina.cli.subprocess, 'run',
+                            lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, stdout=node + '\n', stderr=''))
+        monkeypatch.setattr(saina.cli.os, 'name', 'posix')
+        monkeypatch.setattr(saina.cli.os, 'execvp', lambda file, argv: self.calls.append((file, argv)) or 0)
+        monkeypatch.setattr(saina.cli.subprocess, 'call', lambda argv: pytest.fail('subprocess.call on POSIX'))
+        monkeypatch.delenv('SAINA_AGENT_NPM_SPEC', raising=False)
+
+
+@pytest.mark.parametrize('args', [
+    [], ['--help'], ['-h'], ['run'], ['login', '--home'],
+    ['status', '--json', '--home', '/tmp/h', '--edge', 'wss://edge.example'],
+    ['run', '--version', '--port', '1', '--backend', 'gguf', '--', 'doctor', 'serve'],
+])
+def test_agent_passes_every_argument_through(args, monkeypatch, capsys):
+    from saina.cli import AGENT_NPM_SPEC
+    stub = AgentHandoff(monkeypatch)
+    main(['agent', *args])
+    assert stub.calls == [('/usr/bin/npx', ['/usr/bin/npx', '--yes', '--package', AGENT_NPM_SPEC, '--', 'saina', 'agent', *args])]
+    output = capsys.readouterr()
+    assert output.out == '' and output.err == ''
+
+
+def test_agent_npm_spec_tracks_the_npm_major_minor():
+    from saina.cli import AGENT_NPM_SPEC
+    assert AGENT_NPM_SPEC == '@run-saina/saina@^0.2'
+
+
+def test_agent_env_overrides_npm_spec(monkeypatch, capsys):
+    stub = AgentHandoff(monkeypatch)
+    monkeypatch.setenv('SAINA_AGENT_NPM_SPEC', '/tmp/saina-0.1.0.tgz')
+    main(['agent', 'status', '--json'])
+    assert stub.calls[0][1] == ['/usr/bin/npx', '--yes', '--package', '/tmp/saina-0.1.0.tgz', '--', 'saina', 'agent', 'status', '--json']
+    assert capsys.readouterr().out == ''
+
+
+@pytest.mark.parametrize('which,node,needle', [
+    ({}, 'v24.0.0', 'node was not found on PATH'),
+    ({'node': '/usr/bin/node', 'npx': '/usr/bin/npx'}, 'v22.13.1', 'found Node.js 22'),
+    ({'node': '/usr/bin/node', 'npx': '/usr/bin/npx'}, 'garbage', 'unreadable Node.js version'),
+    ({'node': '/usr/bin/node'}, 'v24.0.0', 'npx'),
+])
+def test_agent_without_usable_node_explains_and_exits_1(which, node, needle, monkeypatch, capsys):
+    stub = AgentHandoff(monkeypatch, node=node, which=which)
+    assert main(['agent', 'run', '--json']) == 1
+    assert stub.calls == []
+    output = capsys.readouterr()
+    assert output.out == ''
+    assert needle in output.err and 'Node.js 24 or newer' in output.err and 'https://nodejs.org' in output.err
+
+
+def test_agent_on_windows_returns_child_exit_code(monkeypatch, capsys):
+    import saina.cli
+    stub = AgentHandoff(monkeypatch)
+    calls = []
+    monkeypatch.setattr(saina.cli.os, 'name', 'nt')
+    monkeypatch.setattr(saina.cli.subprocess, 'call', lambda argv: calls.append(argv) or 3)
+    assert main(['agent', 'devices', '--json']) == 3
+    assert calls == [['/usr/bin/npx', '--yes', '--package', '@run-saina/saina@^0.2', '--', 'saina', 'agent', 'devices', '--json']] and stub.calls == []
+    assert capsys.readouterr().out == ''
+
+
+def test_agent_exec_failure_is_stderr(monkeypatch, capsys):
+    import saina.cli
+    AgentHandoff(monkeypatch)
+    def fail(file, argv): raise PermissionError('denied')
+    monkeypatch.setattr(saina.cli.os, 'execvp', fail)
+    assert main(['agent', 'run']) == 1
+    output = capsys.readouterr()
+    assert output.out == '' and 'denied' in output.err
+
+
+def test_agent_listed_in_help(capsys):
+    with pytest.raises(SystemExit) as exc: main(['--help'])
+    assert exc.value.code == 0
+    assert 'Run the Saina Agent home node (needs Node.js 24+)' in capsys.readouterr().out

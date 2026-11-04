@@ -30,6 +30,22 @@ pip install 'saina[media]'         # decoding images and audio (server, local in
 
 From a checkout, use `pip install .` or `pip install '.[local,server]'`.
 
+## Saina Agent
+
+Saina Agent connects your phone and the Saina apps to the Claude Code and Codex sessions on your
+machine. The home node runs on Node.js 24 or newer; speech and models are hosted by Saina.
+Install either package; both provide the same `saina agent` command:
+
+```sh
+pip install saina        # or: npm install -g @run-saina/saina
+saina agent login --home
+saina agent run
+```
+
+From Python, `saina agent ...` passes every argument to the npm `saina` package through `npx`
+(`saina@^0.2`; set `SAINA_AGENT_NPM_SPEC` to use another version or a local tarball). Without
+Node.js 24 or newer it exits with a message naming what to install.
+
 ### Offline artifact diagnostics
 
 From this checkout, check an already downloaded bundle without loading a model:
